@@ -31,6 +31,31 @@ jobs:
       - name: Parse YAML and enforce deployment invariants
         run: python tools/static_checks.py
 
+      - name: Validate pinned container image references
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/matrix-deploy-images.txt
+          import pathlib
+          import yaml
+
+          versions = yaml.safe_load(
+              pathlib.Path('ansible/inventory/group_vars/all/versions.yml').read_text()
+          ) or {}
+          images = sorted(
+              value for key, value in versions.items()
+              if key.endswith('_image') and isinstance(value, str)
+          )
+          if not images:
+              raise SystemExit('no container image references found')
+          print('\n'.join(images))
+          PY
+
+          while IFS= read -r image; do
+            printf 'Checking image manifest: %s\n' "$image"
+            docker manifest inspect "$image" >/dev/null
+          done < /tmp/matrix-deploy-images.txt
+
       - name: Validate shell syntax
         shell: bash
         run: |
