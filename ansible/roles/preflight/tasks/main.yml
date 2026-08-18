@@ -82,50 +82,53 @@
       - matrix_root_mount.size_available | int >= 10737418240
     fail_msg: 'At least 10 GiB free space is required on /.'
 
-- name: Resolve A records for Matrix hostnames
+- name: Resolve DNS A records for Matrix hostnames
   ansible.builtin.command:
     argv:
-      - getent
-      - ahostsv4
+      - dig
+      - +short
+      - A
       - "{{ item }}"
   loop: "{{ matrix_preflight_domains }}"
   register: matrix_dns_a
   changed_when: false
-  failed_when: false
 
 - name: Require every Matrix hostname to resolve only to configured public IPv4
   ansible.builtin.assert:
     that:
-      - item.rc == 0
       - >-
         (item.stdout |
-         regex_findall('(?m)^([0-9]+(?:\.[0-9]+){3})\s') |
+         regex_findall('(?m)^([0-9]+(?:\.[0-9]+){3})$') |
          unique | list) == [matrix_external_ip]
     fail_msg: >-
       DNS A validation failed for {{ item.item }}.
       Every published A record must resolve to {{ matrix_external_ip }}.
-      Resolver output: {{ item.stdout | default('unresolved') }}
+      DNS output: {{ item.stdout | default('unresolved') }}
   loop: "{{ matrix_dns_a.results }}"
 
-- name: Resolve AAAA records when IPv6 support is disabled
+- name: Resolve DNS AAAA records when IPv6 support is disabled
   ansible.builtin.command:
     argv:
-      - getent
-      - ahostsv6
+      - dig
+      - +short
+      - AAAA
       - "{{ item }}"
   loop: "{{ matrix_preflight_domains }}"
   register: matrix_dns_aaaa
   changed_when: false
-  failed_when: false
   when: not matrix_ipv6_enabled | bool
 
-- name: Reject published AAAA while IPv6 mode is disabled
+- name: Reject real AAAA records while IPv6 mode is disabled
   ansible.builtin.assert:
     that:
-      - item.stdout | trim == ''
+      - >-
+        (item.stdout |
+         regex_findall('(?m)^([0-9A-Fa-f:]+)$') |
+         list | length) == 0
     fail_msg: >-
-      {{ item.item }} publishes IPv6 records while matrix_ipv6_enabled=false.
+      {{ item.item }} publishes an AAAA record while matrix_ipv6_enabled=false.
       Remove AAAA records or implement/enable the IPv6 deployment mode first.
+      DNS output: {{ item.stdout | default('unresolved') }}
   loop: "{{ matrix_dns_aaaa.results | default([]) }}"
   when: not matrix_ipv6_enabled | bool
 
