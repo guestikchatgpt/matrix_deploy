@@ -22,6 +22,27 @@
     matrix_admin_user: admin
 
   pre_tasks:
+    - name: Require resolved version lock before any deployment mutation
+      ansible.builtin.assert:
+        that:
+          - matrix_version_lock is defined
+          - matrix_version_lock is mapping
+          - matrix_version_lock.schema | int == 1
+          - matrix_resolved_images is defined
+          - matrix_resolved_images is sequence
+          - matrix_resolved_images | length == matrix_version_sources | length
+          - postgresql_image is defined
+          - synapse_image is defined
+          - element_web_image is defined
+          - element_call_image is defined
+          - livekit_image is defined
+          - element_jwt_image is defined
+          - synad_image is defined
+        fail_msg: >-
+          Resolved application versions are missing. Run bootstrap/deploy or
+          converge.sh so preflight creates /etc/matrix-deploy/versions.yml, then
+          pass that lock to site.yml.
+
     - name: Prepare local persistent secret directory before controller lookups
       ansible.builtin.file:
         path: "{{ matrix_root_dir }}/.secrets"
