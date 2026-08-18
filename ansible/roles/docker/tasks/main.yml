@@ -3,8 +3,8 @@
   ansible.builtin.assert:
     that:
       - ansible_distribution == "Ubuntu"
-      - ansible_distribution_release in ["noble", "jammy", "focal"]
-    fail_msg: "Официальный репозиторий Docker не поддерживает {{ ansible_distribution }} {{ ansible_distribution_release }}. Проверьте https://docs.docker.com/engine/install/ и при необходимости обновите плейбук."
+      - ansible_distribution_release == "noble"
+    fail_msg: "Matrix Deploy поддерживает Docker deployment только на Ubuntu 24.04 LTS (noble)."
 
 - name: Создать директорию для ключей apt
   ansible.builtin.file:
@@ -53,3 +53,4 @@
     state: present
     ipam_config:
       - subnet: "{{ docker_network_subnet }}"
+        gateway: "{{ docker_network_gateway }}"
