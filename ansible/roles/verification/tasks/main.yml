@@ -1,22 +1,42 @@
-﻿---
-- name: Развернуть скрипт проверки стека
+---
+- name: Install Matrix stack verifier
   ansible.builtin.template:
     src: verify.sh.j2
-    dest: /usr/local/bin/matrix-stack-verify.sh
+    dest: /usr/local/sbin/matrix-stack-verify
     owner: root
     group: root
-    mode: "0755"
+    mode: '0755'
 
-- name: Запустить проверочный скрипт
-  ansible.builtin.command: /usr/local/bin/matrix-stack-verify.sh
-  register: verification_run
+- name: Keep legacy verifier path as compatibility symlink
+  ansible.builtin.file:
+    src: /usr/local/sbin/matrix-stack-verify
+    dest: /usr/local/bin/matrix-stack-verify.sh
+    state: link
+    force: true
+
+- name: Validate verifier shell syntax
+  ansible.builtin.command: bash -n /usr/local/sbin/matrix-stack-verify
   changed_when: false
 
-- name: Вывести результат проверки
-  ansible.builtin.debug:
-    msg: "{{ verification_run.stdout }}"
+- name: Run final Matrix stack verification
+  ansible.builtin.command: /usr/local/sbin/matrix-stack-verify
+  register: verification_run
+  changed_when: false
+  failed_when: false
+  environment:
+    TERM: dumb
 
-- name: В случае ошибки выдать вывод stderr
+- name: Show Matrix verification output
   ansible.builtin.debug:
-    msg: "{{ verification_run.stderr }}"
-  when: verification_run.rc != 0
+    msg: "{{ verification_run.stdout_lines | default([]) }}"
+
+- name: Show Matrix verification stderr
+  ansible.builtin.debug:
+    msg: "{{ verification_run.stderr_lines | default([]) }}"
+  when: verification_run.stderr | default('') | length > 0
+
+- name: Require final Matrix verification success
+  ansible.builtin.assert:
+    that:
+      - verification_run.rc == 0
+    fail_msg: 'Matrix stack verification failed. Review the output above.'
