@@ -1,0 +1,7 @@
+---
+- name: Verify Matrix deployment
+  hosts: matrix_hosts
+  become: true
+  gather_facts: true
+  roles:
+    - role: verification
