@@ -169,17 +169,23 @@ jobs:
               --extra-vars '@../tests/ci-vars.yml'
           done
 
-      - name: Render and syntax-check verifier variants
+      - name: Render and syntax-check verifier variants using resolved lock
         working-directory: ansible
         shell: bash
         run: |
           set -euo pipefail
+
+          sudo cp /etc/matrix-deploy/versions.yml /tmp/matrix-ci-versions.yml
+          sudo chown "$(id -u):$(id -g)" /tmp/matrix-ci-versions.yml
+          chmod 0600 /tmp/matrix-ci-versions.yml
+
           for federation in true false; do
             output="/tmp/matrix-stack-verify-${federation}.sh"
             ansible localhost \
               -m ansible.builtin.template \
               -a "src=roles/verification/templates/verify.sh.j2 dest=${output} mode=0755" \
               --extra-vars '@../tests/ci-vars.yml' \
+              --extra-vars '@/tmp/matrix-ci-versions.yml' \
               --extra-vars "synapse_enable_federation=${federation}"
             bash -n "$output"
           done
