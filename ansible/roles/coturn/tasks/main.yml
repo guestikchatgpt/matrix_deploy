@@ -68,6 +68,7 @@
       - "{{ docker_network_subnet }}"
   register: coturn_matrix_docker_peer_range_cmd
   changed_when: false
+  check_mode: false
 
 - name: Store Matrix Docker peer deny range
   ansible.builtin.set_fact:
