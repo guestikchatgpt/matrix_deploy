@@ -111,6 +111,51 @@ if isinstance(version_policy, dict):
                 f"expected={sorted(required_sources)} actual={sorted(actual_sources)}"
             )
 
+        # These are upstream prerelease shapes observed in the Matrix stack,
+        # plus generic alpha/beta/dev forms. Every github_release policy must
+        # reject all of them. This protects the stable-only contract even if an
+        # upstream release is accidentally not marked as `prerelease` by GitHub.
+        prerelease_examples = {
+            "synapse": (
+                "v1.158.0rc1",
+                "v1.153.0rc3",
+                "v1.159.0-beta.1",
+            ),
+            "element_web": (
+                "v1.12.19-rc.0",
+                "v1.12.16-rc.1",
+                "v1.12.26-beta.1",
+            ),
+            "element_call": (
+                "v0.19.2-rc.1",
+                "v0.19.1-rc2",
+                "v0.24.0-beta.1",
+            ),
+            "livekit": (
+                "v1.13.5-rc.1",
+                "v1.13.5-beta.1",
+                "v1.13.5-alpha.1",
+            ),
+            "element_jwt": (
+                "v0.5.0-rc1",
+                "v0.5.0-beta.1",
+                "v0.5.0-dev.1",
+            ),
+            "synad": (
+                "v1.4.0-rc1",
+                "v1.4.0-beta.1",
+                "v1.4.0-dev.1",
+            ),
+        }
+        stable_examples = {
+            "synapse": "v1.159.0",
+            "element_web": "v1.12.26",
+            "element_call": "v0.24.0",
+            "livekit": "v1.13.5",
+            "element_jwt": "v0.5.0",
+            "synad": "v1.4.0",
+        }
+
         output_vars: set[str] = set()
         for name, raw_source in sources.items():
             if not isinstance(raw_source, dict):
@@ -146,8 +191,42 @@ if isinstance(version_policy, dict):
                     errors.append(f"Version source {name!r} is missing github_repo")
                 if raw_source.get("tag_transform") not in {"identity", "strip_v"}:
                     errors.append(f"Version source {name!r} has invalid tag_transform")
-                if not raw_source.get("release_regex"):
+
+                release_regex = str(raw_source.get("release_regex", "")).strip()
+                if not release_regex:
                     errors.append(f"Version source {name!r} is missing stable release_regex")
+                    continue
+
+                try:
+                    stable_pattern = re.compile(release_regex)
+                except re.error as exc:
+                    errors.append(
+                        f"Version source {name!r} has invalid release_regex {release_regex!r}: {exc}"
+                    )
+                    continue
+
+                stable_example = stable_examples.get(name)
+                if stable_example and not stable_pattern.fullmatch(stable_example):
+                    errors.append(
+                        f"Stable release regex for {name!r} rejects expected stable tag "
+                        f"{stable_example!r}: {release_regex!r}"
+                    )
+
+                for prerelease_tag in prerelease_examples.get(name, ()):
+                    if stable_pattern.fullmatch(prerelease_tag):
+                        errors.append(
+                            f"Stable release regex for {name!r} accepts prerelease tag "
+                            f"{prerelease_tag!r}: {release_regex!r}"
+                        )
+
+        # PostgreSQL is resolved from Docker Official Images rather than GitHub
+        # Releases. Its resolver accepts only numeric <major>.<patch>[.<patch>]
+        # tags, therefore official-image tags such as 19beta2 are excluded by
+        # construction. Keep the configured major numeric so that remains true.
+        postgres_source = sources.get("postgresql")
+        if isinstance(postgres_source, dict):
+            if postgres_source.get("resolver") != "postgresql_dockerhub":
+                errors.append("PostgreSQL must keep the postgresql_dockerhub resolver")
 else:
     errors.append("Version policy YAML root must be a mapping")
 
