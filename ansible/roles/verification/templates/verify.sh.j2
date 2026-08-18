@@ -62,7 +62,7 @@ container_check() {
 http_check() {
     local label="$1"
     local url="$2"
-    if curl -4fsS --max-time 10 "$url" >/dev/null 2>&1; then
+    if curl -4fsS --max-time 10 "${CURL_LOCAL_RESOLVE[@]}" "$url" >/dev/null 2>&1; then
         ok "$label"
     else
         fail "$label"
@@ -92,6 +92,17 @@ ufw_rule_check() {
 TARGET_IP="{{ matrix_external_ip }}"
 SOCKETS="$(ss -lntup 2>/dev/null || true)"
 UFW_STATUS="$(ufw status 2>/dev/null || true)"
+CURL_LOCAL_RESOLVE=(
+    --resolve '{{ matrix_domains.synapse }}:80:127.0.0.1'
+    --resolve '{{ matrix_domains.synapse }}:443:127.0.0.1'
+{% if synapse_enable_federation | bool %}
+    --resolve '{{ matrix_domains.synapse }}:8448:127.0.0.1'
+{% endif %}
+    --resolve '{{ matrix_domains.element }}:443:127.0.0.1'
+    --resolve '{{ matrix_domains.admin }}:443:127.0.0.1'
+    --resolve '{{ matrix_domains.element_call }}:443:127.0.0.1'
+    --resolve '{{ matrix_domains.livekit }}:443:127.0.0.1'
+)
 
 printf '%s====================================================%s\n' "$YELLOW" "$RESET"
 printf '%s              Проверка Matrix стека%s\n' "$BOLD" "$RESET"
@@ -176,7 +187,7 @@ if curl -fsS --max-time 5 http://127.0.0.1:8008/_synapse/metrics >/dev/null 2>&1
 else
     fail 'Synapse metrics недоступны локально'
 fi
-PUBLIC_METRICS="$(curl -4sk --max-time 10 -o /dev/null -w '%{http_code}' https://{{ matrix_domains.synapse }}/_synapse/metrics)"
+PUBLIC_METRICS="$(curl -4sk --max-time 10 "${CURL_LOCAL_RESOLVE[@]}" -o /dev/null -w '%{http_code}' https://{{ matrix_domains.synapse }}/_synapse/metrics)"
 if [ "$PUBLIC_METRICS" = '404' ]; then
     ok 'Synapse metrics закрыты снаружи'
 else
@@ -191,7 +202,7 @@ http_check 'LiveKit HTTPS frontend' 'https://{{ matrix_domains.livekit }}/'
 http_check 'LiveKit JWT health' 'https://{{ matrix_domains.livekit }}/livekit/jwt/healthz'
 
 section 'MatrixRTC discovery'
-if curl -4fsS --max-time 10 https://{{ matrix_domains.synapse }}/.well-known/matrix/client | python3 -c '
+if curl -4fsS --max-time 10 "${CURL_LOCAL_RESOLVE[@]}" https://{{ matrix_domains.synapse }}/.well-known/matrix/client | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d["m.homeserver"]["base_url"] == "https://{{ matrix_domains.synapse }}"
@@ -222,13 +233,13 @@ else
 fi
 
 section 'TLS'
-LIVEKIT_TLS="$(timeout 10 openssl s_client -connect {{ matrix_domains.livekit }}:{{ livekit_turn_tls_port }} -servername {{ matrix_domains.livekit }} -verify_return_error </dev/null 2>&1 || true)"
+LIVEKIT_TLS="$(timeout 10 openssl s_client -connect 127.0.0.1:{{ livekit_turn_tls_port }} -servername {{ matrix_domains.livekit }} -verify_return_error </dev/null 2>&1 || true)"
 if grep -q 'Verify return code: 0' <<<"$LIVEKIT_TLS"; then
     ok 'LiveKit TURN/TLS :{{ livekit_turn_tls_port }} certificate'
 else
     fail 'LiveKit TURN/TLS :{{ livekit_turn_tls_port }} certificate'
 fi
-COTURN_TLS="$(timeout 10 openssl s_client -connect {{ matrix_domains.turn }}:{{ coturn_tls_port }} -servername {{ matrix_domains.turn }} -verify_return_error </dev/null 2>&1 || true)"
+COTURN_TLS="$(timeout 10 openssl s_client -connect 127.0.0.1:{{ coturn_tls_port }} -servername {{ matrix_domains.turn }} -verify_return_error </dev/null 2>&1 || true)"
 if grep -q 'Verify return code: 0' <<<"$COTURN_TLS"; then
     ok 'legacy Coturn TLS :{{ coturn_tls_port }} certificate'
 else
@@ -271,14 +282,14 @@ printf '%s\n' "$VALUE" > "$FILE"
 chmod 0644 "$FILE"
 ACME_FAILED=0
 for host in '{{ matrix_domains.synapse }}' '{{ matrix_domains.element }}' '{{ matrix_domains.admin }}' '{{ matrix_domains.element_call }}' '{{ matrix_domains.livekit }}' '{{ matrix_domains.turn }}'; do
-    body="$(curl -4fsS --max-time 10 "http://${host}/.well-known/acme-challenge/${TOKEN}" 2>/dev/null)" || body=''
+    body="$(curl -4fsS --max-time 10 --resolve "${host}:80:127.0.0.1" "http://${host}/.well-known/acme-challenge/${TOKEN}" 2>/dev/null)" || body=''
     if [ "$body" != "$VALUE" ]; then
         fail "ACME HTTP-01: $host"
         ACME_FAILED=1
     fi
 done
 rm -f "$FILE"
-if [ "$ACME_FAILED" -eq 0 ]; then ok 'ACME HTTP-01 работает на всех Matrix hostnames'; fi
+if [ "$ACME_FAILED" -eq 0 ]; then ok 'ACME HTTP-01 routing работает локально на всех Matrix hostnames'; fi
 
 section 'Fail2ban'
 F2B_PING="$(fail2ban-client ping 2>/dev/null || true)"
