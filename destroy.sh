@@ -22,13 +22,13 @@ PY
 
 printf 'DANGER: this removes Matrix containers, database/data, Matrix Nginx/Coturn state, Matrix certificates and Matrix-specific firewall rules.\n'
 printf 'Backups and system packages are preserved.\n\n'
-printf 'A fresh backup will be created first.\n'
+printf 'A fresh backup including the Synapse media store will be created first.\n'
 read -r -p "Type BACKUP ${server_name} to continue: " backup_confirm
 [[ "$backup_confirm" == "BACKUP ${server_name}" ]] || { echo 'Destroy cancelled.'; exit 1; }
 
-"${REPO_ROOT}/backup.sh"
+"${REPO_ROOT}/backup.sh" --include-media
 
-printf '\nBackup completed. Destruction is now irreversible without a tested restore procedure.\n'
+printf '\nFull backup completed. Destruction is now irreversible without a tested restore procedure.\n'
 read -r -p "Type DESTROY ${server_name} to remove the deployment: " destroy_confirm
 [[ "$destroy_confirm" == "DESTROY ${server_name}" ]] || { echo 'Destroy cancelled after backup; no Matrix state was removed.'; exit 1; }
 
