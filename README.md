@@ -9,9 +9,10 @@ The repository keeps two deliberate call paths:
 
 These TURN stacks are independent by design and must not be consolidated.
 
-> Status: hardening branch / release candidate preparation. Static and Ansible
-> syntax CI is in place. A clean-host integration test is still required before
-> this branch should be merged into `main` or treated as production release.
+> Status: hardening branch / release candidate preparation. Static, syntax and
+> bootstrap/preflight runtime CI are in place. A full clean-host integration test
+> with real project DNS and ACME is still required before this branch should be
+> merged into `main` or treated as production release.
 
 ## What is deployed
 
@@ -85,6 +86,10 @@ checks include:
 - unexpected AAAA records while IPv6 mode is disabled;
 - fresh-host port conflicts;
 - apt repository reachability.
+
+DNS A/AAAA validation queries DNS directly rather than using NSS-family lookup
+output, so IPv4-mapped IPv6 addresses cannot be mistaken for published AAAA
+records.
 
 IPv6 is currently **not** implemented as a production deployment mode. Publishing
 AAAA records while `matrix_ipv6_enabled=false` is treated as a configuration
@@ -326,19 +331,25 @@ applications.
 GitHub Actions performs:
 
 - YAML/static invariant checks, including rejection of moving `:latest` image
-  references;
+  references and known deprecated Ansible patterns;
 - registry manifest validation for every pinned application image, requiring
   both `linux/amd64` and `linux/arm64` support;
 - shell syntax checks;
-- pinned Ansible/collection installation;
+- an actual `bootstrap.sh --prepare-only` run on Ubuntu 24.04 using the pinned
+  controller and collection versions;
+- an actual NAT-mode `preflight.yml` run on a fresh Ubuntu 24.04 runner, using
+  real DNS A/AAAA queries and exercising resource, port, routing and apt checks;
 - inventory parsing;
 - `ansible-playbook --syntax-check` for deploy, preflight, verification, backup
   and destroy playbooks;
 - actual Jinja rendering of the verifier with federation both enabled and
   disabled, followed by `bash -n` on both rendered scripts.
 
-Static CI is necessary but not sufficient. Before a release candidate is merged,
-run the remaining integration gates from `ROADMAP.md`: clean Ubuntu deployment,
-second converge/idempotence, `check.sh`, reboot persistence, Certbot dry-run,
-federation, legacy TURN and MatrixRTC calls, plus backup/destroy/restore rehearsal
-before restore automation is exposed.
+The Ansible configuration disables deprecated top-level fact injection; roles use
+`ansible_facts[...]`. Apt repository management uses the deb822 format.
+
+These CI gates are necessary but not sufficient. Before a release candidate is
+merged, run the remaining integration gates from `ROADMAP.md`: full clean Ubuntu
+deployment with real DNS/ACME, second converge/idempotence, `check.sh`, reboot
+persistence, Certbot dry-run, federation, legacy TURN and MatrixRTC calls, plus
+backup/destroy/restore rehearsal before restore automation is exposed.
