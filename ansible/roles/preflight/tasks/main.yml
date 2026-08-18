@@ -29,16 +29,26 @@
       - matrix_ssh_port | int < 65536
     fail_msg: 'Deployment variables are incomplete or invalid.'
 
-- name: Validate IPv4 variables with Python ipaddress
+- name: Require a globally routable public IPv4
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - >-
+        import ipaddress,sys;
+        a=ipaddress.ip_address(sys.argv[1]);
+        assert a.version == 4 and a.is_global,
+        f'not a globally routable IPv4: {a}'
+      - "{{ matrix_external_ip }}"
+  changed_when: false
+
+- name: Validate Coturn relay IPv4
   ansible.builtin.command:
     argv:
       - python3
       - -c
       - "import ipaddress,sys; a=ipaddress.ip_address(sys.argv[1]); assert a.version == 4"
-      - "{{ item }}"
-  loop:
-    - "{{ matrix_external_ip }}"
-    - "{{ coturn_relay_ip }}"
+      - "{{ coturn_relay_ip }}"
   changed_when: false
 
 - name: Collect target FQDNs
