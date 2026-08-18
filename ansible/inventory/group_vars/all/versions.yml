@@ -1,17 +1,21 @@
 ---
-# Tested/pinned application versions.
+# Pinned release-candidate application versions.
 # Routine convergence must not silently move these tags forward.
+# The production reference used moving `latest` images for Synapse/LiveKit and
+# reported newer runtime version strings; those are not used as pins unless the
+# corresponding immutable release tags actually exist.
 
 postgresql_version: "18"
 postgresql_image: "postgres:18.6"
 
-# Production reference on 2026-08-18 ran Synapse 1.158.0 successfully.
-synapse_image: "matrixdotorg/synapse:v1.158.0"
+# Latest published stable Synapse Docker tag verified during the 2026-08-18
+# hardening pass. MatrixRTC transport configuration predates this release.
+synapse_image: "matrixdotorg/synapse:v1.157.2"
 
 # Stable upstream releases used for deterministic deployment.
 element_web_image: "vectorim/element-web:v1.12.20"
 element_call_image: "ghcr.io/element-hq/element-call:v0.20.0"
-livekit_image: "livekit/livekit-server:v1.13.5"
+livekit_image: "livekit/livekit-server:v1.13.4"
 element_jwt_image: "ghcr.io/element-hq/lk-jwt-service:0.5.0"
 
 # Ketesa currently documents the container `latest` channel as its supported
