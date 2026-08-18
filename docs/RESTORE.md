@@ -1,63 +1,71 @@
-# Restore status and backup format
+# Статус восстановления и формат резервной копии
 
-Automated restore is intentionally **not enabled yet**. The backup format is now
-sufficiently structured to build restore automation, but restoring a Matrix
-identity/database/media set is a destructive operation and must first be proven
-on a disposable Ubuntu 24.04 host.
+Автоматическое восстановление намеренно **пока не включено**. Формат backup уже
+достаточно структурирован для создания restore automation, но восстановление
+Matrix identity/database/media — destructive-операция, которую сначала нужно
+доказать на disposable-хосте Ubuntu 24.04.
 
-## Backup contents
+## Содержимое резервной копии
 
-Each `/var/backups/matrix-deploy/<timestamp>/` contains:
+Каждая директория `/var/backups/matrix-deploy/<timestamp>/` содержит:
 
 - `MANIFEST.txt`;
-- `synapse.pgdump` — PostgreSQL custom-format logical dump;
-- `config-state.tar.gz` — deployment topology, generated secrets, Synapse
-  configuration/signing key, app configuration, Nginx/Coturn/Fail2ban state,
-  Let's Encrypt state, and optionally the Synapse media store;
+- `synapse.pgdump` — логический dump PostgreSQL в custom format;
+- `config-state.tar.gz` — topology развёртывания, сгенерированные секреты,
+  конфигурацию/signing key Synapse, конфигурацию приложений, состояние
+  Nginx/Coturn/Fail2ban, состояние Let's Encrypt и, при необходимости, media
+  store Synapse;
 - `docker-inspect.json`;
 - `docker-images.txt`;
 - `ufw-status.txt`.
 
-The raw PostgreSQL data directory is not backed up. Restore must initialize the
-pinned PostgreSQL major version and load `synapse.pgdump` with `pg_restore`.
+Сырая директория данных PostgreSQL в backup не включается. Restore должен
+инициализировать зафиксированную major-версию PostgreSQL и загрузить
+`synapse.pgdump` через `pg_restore`.
 
-## Media requirement
+## Требование к media
 
-For disaster recovery after `destroy.sh`, use only a backup whose manifest says:
+Для disaster recovery после `destroy.sh` используйте только backup, в manifest
+которого указано:
 
 ```text
 media_store_included=true
 ```
 
-`destroy.sh` enforces creation of such a backup before removing the deployment.
-A normal `backup.sh` or pre-upgrade backup can legitimately say
-`media_store_included=false` because the live media directory is not removed by a
-normal converge/upgrade.
+`destroy.sh` принудительно создаёт такой backup перед удалением развёртывания.
+Обычный `backup.sh` или pre-upgrade backup вполне может содержать
+`media_store_included=false`, потому что при обычном converge/upgrade живая media
+директория не удаляется.
 
-## Planned restore sequence
+## Планируемая последовательность восстановления
 
-The integration-tested restore workflow should perform these stages, in order:
+Проверенный integration-тестом restore workflow должен выполнять следующие этапы
+именно в таком порядке:
 
-1. validate the backup manifest and requested Matrix server name;
-2. require a clean/matching Ubuntu 24.04 target and compatible repository version;
-3. prepare the pinned Ansible environment (`bootstrap.sh --prepare-only`);
-4. restore `/etc/matrix-deploy/deployment.yml`, source secrets, signing key,
-   certificate state and media/config files from `config-state.tar.gz`;
-5. deploy only host baseline + Docker + Nginx + an empty PostgreSQL instance;
-6. restore `synapse.pgdump` into the empty Synapse database with explicit
-   ownership/clean semantics;
-7. deploy Synapse and the remaining application/TURN roles;
-8. run standard and deep verification;
-9. verify login, federation, legacy TURN and MatrixRTC calls before declaring the
-   restore complete.
+1. проверить backup manifest и указанное Matrix server name;
+2. потребовать чистый/совместимый target с Ubuntu 24.04 и совместимую версию
+   репозитория;
+3. подготовить зафиксированное Ansible-окружение (`bootstrap.sh --prepare-only`);
+4. восстановить `/etc/matrix-deploy/deployment.yml`, исходные секреты, signing key,
+   состояние сертификатов и media/config-файлы из `config-state.tar.gz`;
+5. развернуть только базовый host baseline + Docker + Nginx + пустой экземпляр
+   PostgreSQL;
+6. восстановить `synapse.pgdump` в пустую базу Synapse через `pg_restore` с явно
+   заданной семантикой ownership/clean;
+7. развернуть Synapse и остальные application/TURN roles;
+8. выполнить обычную и deep verification;
+9. проверить login, federation, классический TURN и MatrixRTC calls до объявления
+   restore завершённым.
 
-Do not replace this sequence with a raw copy of PostgreSQL's data directory. The
-playbook has a PostgreSQL major-version guard specifically to prevent implicit
-major upgrades or incompatible data-directory starts.
+Нельзя заменять эту последовательность простым копированием сырой директории
+данных PostgreSQL. В playbook специально предусмотрен PostgreSQL major-version
+guard, который не допускает неявных major upgrades или запуска несовместимого
+data directory.
 
-## Why there is no `restore.sh` yet
+## Почему `restore.sh` пока отсутствует
 
-A syntactically correct restore script can still destroy identity, signing-key,
-media or database consistency if its ordering is wrong. This repository will add
-`restore.sh` only after the sequence above has passed a clean-host destroy/restore
-integration test using a full backup.
+Даже синтаксически корректный restore script может нарушить согласованность
+identity, signing key, media или database, если этапы выполняются в неправильном
+порядке. `restore.sh` будет добавлен в этот репозиторий только после того, как
+описанная выше последовательность успешно пройдёт clean-host destroy/restore
+integration test с использованием полного backup.
