@@ -17,6 +17,7 @@
 - name: Validate verifier shell syntax
   ansible.builtin.command: bash -n /usr/local/sbin/matrix-stack-verify
   changed_when: false
+  when: not ansible_check_mode
 
 - name: Run final Matrix stack verification
   ansible.builtin.command: /usr/local/sbin/matrix-stack-verify
@@ -25,21 +26,26 @@
   failed_when: false
   environment:
     TERM: dumb
+  when: not ansible_check_mode
 
 - name: Show Matrix verification output
   ansible.builtin.debug:
     msg: "{{ verification_run.stdout_lines | default([]) }}"
+  when: not ansible_check_mode
 
 - name: Show Matrix verification stderr
   ansible.builtin.debug:
     msg: "{{ verification_run.stderr_lines | default([]) }}"
-  when: verification_run.stderr | default('') | length > 0
+  when:
+    - not ansible_check_mode
+    - verification_run.stderr | default('') | length > 0
 
 - name: Require final Matrix verification success
   ansible.builtin.assert:
     that:
       - verification_run.rc == 0
     fail_msg: 'Matrix stack verification failed. Review the output above.'
+  when: not ansible_check_mode
 
 - name: Run Certbot renewal dry-run with deploy hooks
   ansible.builtin.command:
@@ -51,6 +57,7 @@
   register: verification_certbot_dry_run
   changed_when: false
   failed_when: false
+  when: not ansible_check_mode
   tags:
     - never
     - deep_verify
@@ -58,6 +65,7 @@
 - name: Show Certbot dry-run output
   ansible.builtin.debug:
     msg: "{{ verification_certbot_dry_run.stdout_lines | default([]) }}"
+  when: not ansible_check_mode
   tags:
     - never
     - deep_verify
@@ -67,6 +75,7 @@
     that:
       - verification_certbot_dry_run.rc == 0
     fail_msg: 'Certbot renewal dry-run failed. Review the output above.'
+  when: not ansible_check_mode
   tags:
     - never
     - deep_verify
