@@ -1,0 +1,9 @@
+---
+matrix_base_domain: ci.example
+matrix_external_ip: 203.0.113.10
+certbot_email: ci@example.invalid
+matrix_admin_password: ci-only-placeholder
+matrix_ssh_port: 22
+coturn_network_mode: direct_public
+coturn_relay_ip: 203.0.113.10
+synapse_enable_federation: true
