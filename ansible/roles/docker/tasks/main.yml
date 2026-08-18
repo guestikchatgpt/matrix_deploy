@@ -41,13 +41,11 @@
     state: started
     enabled: true
 
-- name: Ensure Matrix service account is not granted Docker socket access
+- name: Ensure Matrix service account has no supplementary groups
   ansible.builtin.user:
     name: "{{ matrix_system_user }}"
-    groups: docker
+    groups: ''
     append: false
-  register: matrix_docker_group_cleanup
-  failed_when: false
 
 - name: Создать docker сеть
   community.docker.docker_network:
