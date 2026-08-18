@@ -14,7 +14,8 @@
       LIVEKIT_KEY: "{{ livekit_api_key }}"
       LIVEKIT_SECRET: "{{ livekit_api_secret }}"
       LIVEKIT_JWT_BIND: "{{ element_jwt_bind }}"
-      LIVEKIT_FULL_ACCESS_HOMESERVERS: "{{ element_jwt_full_access_homeservers | join(',') }}"
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: >-
+        {{ ([matrix_domains.synapse] + matrix_local_homeserver_aliases) | unique | join(',') }}
       LIVEKIT_LOG_LEVEL: info
     state: started
   no_log: true
