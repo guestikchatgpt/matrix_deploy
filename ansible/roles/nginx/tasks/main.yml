@@ -33,12 +33,25 @@
 - name: Require Nginx keyring
   ansible.builtin.assert: {that: [nginx_keyring_after.stat.exists]}
 
+- name: Remove legacy Nginx apt source format
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/nginx-mainline.list
+    state: absent
+
 - name: Add Nginx mainline repository
-  ansible.builtin.apt_repository:
-    repo: >-
-      deb [arch={{ matrix_deb_arch }} signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg]
-      https://nginx.org/packages/mainline/ubuntu {{ ansible_facts['distribution_release'] }} nginx
-    filename: nginx-mainline
+  ansible.builtin.deb822_repository:
+    name: nginx-mainline
+    types:
+      - deb
+    uris:
+      - https://nginx.org/packages/mainline/ubuntu
+    suites:
+      - "{{ ansible_facts['distribution_release'] }}"
+    components:
+      - nginx
+    architectures:
+      - "{{ matrix_deb_arch }}"
+    signed_by: /usr/share/keyrings/nginx-archive-keyring.gpg
     state: present
 
 - name: Install Nginx and Certbot
