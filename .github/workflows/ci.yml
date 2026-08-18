@@ -56,9 +56,6 @@ jobs:
           relay_ip="$(ip -4 route get 1.1.1.1 | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
           test -n "$relay_ip"
 
-          # sslip.io resolves arbitrary subdomains containing this IPv4 to the
-          # encoded address, so this exercises real DNS A/AAAA queries without
-          # mutating /etc/hosts or requiring project-owned test DNS.
           public_ip='8.8.8.8'
           base_domain='8-8-8-8.sslip.io'
 
@@ -72,17 +69,37 @@ jobs:
           synapse_enable_federation: true
           coturn_network_mode: "nat"
           coturn_relay_ip: "${relay_ip}"
-          matrix_refresh_versions: true
           EOF
 
           (
             cd ansible
             sudo --preserve-env=GITHUB_TOKEN ../.venv/bin/ansible-playbook playbooks/preflight.yml \
-              --extra-vars '@/tmp/matrix-ci-preflight.yml'
+              --extra-vars '@/tmp/matrix-ci-preflight.yml' \
+              --extra-vars 'matrix_refresh_versions=true'
           )
 
           sudo test -s /etc/matrix-deploy/versions.yml
           sudo cat /etc/matrix-deploy/versions.yml
+
+      - name: Verify routine preflight checks but does not rewrite version lock
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          before="$(sudo sha256sum /etc/matrix-deploy/versions.yml | awk '{print $1}')"
+
+          (
+            cd ansible
+            sudo --preserve-env=GITHUB_TOKEN ../.venv/bin/ansible-playbook playbooks/preflight.yml \
+              --extra-vars '@/tmp/matrix-ci-preflight.yml' \
+              --extra-vars 'matrix_refresh_versions=false'
+          )
+
+          after="$(sudo sha256sum /etc/matrix-deploy/versions.yml | awk '{print $1}')"
+          test "$before" = "$after"
+          printf 'Version lock unchanged on routine preflight: %s\n' "$after"
 
       - name: Validate dynamically resolved image references and architectures
         shell: bash
