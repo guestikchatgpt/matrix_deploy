@@ -40,3 +40,33 @@
     that:
       - verification_run.rc == 0
     fail_msg: 'Matrix stack verification failed. Review the output above.'
+
+- name: Run Certbot renewal dry-run with deploy hooks
+  ansible.builtin.command:
+    argv:
+      - certbot
+      - renew
+      - --dry-run
+      - --run-deploy-hooks
+  register: verification_certbot_dry_run
+  changed_when: false
+  failed_when: false
+  tags:
+    - never
+    - deep_verify
+
+- name: Show Certbot dry-run output
+  ansible.builtin.debug:
+    msg: "{{ verification_certbot_dry_run.stdout_lines | default([]) }}"
+  tags:
+    - never
+    - deep_verify
+
+- name: Require Certbot dry-run success
+  ansible.builtin.assert:
+    that:
+      - verification_certbot_dry_run.rc == 0
+    fail_msg: 'Certbot renewal dry-run failed. Review the output above.'
+  tags:
+    - never
+    - deep_verify
