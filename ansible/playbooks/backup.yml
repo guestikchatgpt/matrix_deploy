@@ -9,6 +9,7 @@
     matrix_backup_id: "{{ ansible_date_time.iso8601_basic_short }}"
     matrix_backup_dir: "{{ matrix_backup_root }}/{{ matrix_backup_id }}"
     matrix_backup_candidates:
+      - /etc/matrix-deploy
       - "{{ matrix_root_dir }}/.secrets"
       - "{{ synapse_data_dir }}/homeserver.yaml"
       - "{{ synapse_data_dir }}/log.config"
