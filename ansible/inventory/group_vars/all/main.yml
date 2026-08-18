@@ -32,6 +32,11 @@ matrix_system_user: matrix
 matrix_system_group: matrix
 matrix_root_dir: /opt/matrix
 
+# Additional Matrix server names operated by the same trusted local deployment.
+# Keep empty unless those aliases are intentional and actually resolve to this
+# homeserver. The primary matrix_domains.synapse is always trusted automatically.
+matrix_local_homeserver_aliases: []
+
 # Docker network used by containerised services. LiveKit intentionally uses
 # host networking for RTC/TURN and is not attached to this bridge.
 docker_network_name: matrix-net
@@ -113,9 +118,6 @@ livekit_turn_relay_range_end: 63999
 livekit_room_auto_create: false
 
 element_jwt_bind: ":8080"
-element_jwt_full_access_homeservers:
-  - "{{ matrix_domains.synapse }}"
-  - "{{ matrix_base_domain }}"
 
 # Nginx / ACME
 nginx_sites_root: /var/www/matrix
