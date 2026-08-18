@@ -28,8 +28,8 @@ These TURN stacks are independent by design and must not be consolidated.
 - Fail2ban SSH baseline.
 
 Container/application versions are pinned in
-`ansible/inventory/group_vars/all/versions.yml`. Ketesa `latest` is currently an
-explicit documented exception.
+`ansible/inventory/group_vars/all/versions.yml`. Moving `latest` tags are not
+accepted in the release-candidate matrix.
 
 ## First deployment
 
@@ -325,7 +325,10 @@ applications.
 
 GitHub Actions performs:
 
-- YAML/static invariant checks;
+- YAML/static invariant checks, including rejection of moving `:latest` image
+  references;
+- registry manifest validation for every pinned application image, requiring
+  both `linux/amd64` and `linux/arm64` support;
 - shell syntax checks;
 - pinned Ansible/collection installation;
 - inventory parsing;
