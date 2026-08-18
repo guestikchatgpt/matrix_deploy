@@ -4,13 +4,14 @@ set -euo pipefail
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly ANSIBLE_DIR="${REPO_ROOT}/ansible"
 readonly ANSIBLE_PLAYBOOK="${REPO_ROOT}/.venv/bin/ansible-playbook"
+readonly VENV_PYTHON="${REPO_ROOT}/.venv/bin/python"
 readonly CONFIG_FILE="/etc/matrix-deploy/deployment.yml"
 
 [[ ${EUID} -eq 0 ]] || { echo 'ERROR: run destroy.sh as root' >&2; exit 1; }
 [[ -x "$ANSIBLE_PLAYBOOK" ]] || { echo 'ERROR: run ./bootstrap.sh first' >&2; exit 1; }
 [[ -r "$CONFIG_FILE" ]] || { echo "ERROR: deployment config not found: $CONFIG_FILE" >&2; exit 1; }
 
-server_name="$(python3 - "$CONFIG_FILE" <<'PY'
+server_name="$("$VENV_PYTHON" - "$CONFIG_FILE" <<'PY'
 import sys, yaml
 cfg = yaml.safe_load(open(sys.argv[1])) or {}
 base = cfg.get('matrix_base_domain', '')
