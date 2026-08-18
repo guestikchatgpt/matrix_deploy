@@ -6,12 +6,18 @@ readonly ANSIBLE_DIR="${REPO_ROOT}/ansible"
 readonly VENV_PYTHON="${REPO_ROOT}/.venv/bin/python"
 readonly ANSIBLE_PLAYBOOK="${REPO_ROOT}/.venv/bin/ansible-playbook"
 readonly CONFIG_FILE="/etc/matrix-deploy/deployment.yml"
+readonly VERSION_LOCK_FILE="/etc/matrix-deploy/versions.yml"
 readonly MATRIX_ROOT="/opt/matrix"
 readonly SECRET_DIR="${MATRIX_ROOT}/.secrets"
 
 [[ ${EUID} -eq 0 ]] || { echo 'ERROR: run check.sh as root' >&2; exit 1; }
 [[ -x "$ANSIBLE_PLAYBOOK" && -x "$VENV_PYTHON" ]] || { echo 'ERROR: run ./bootstrap.sh --prepare-only first' >&2; exit 1; }
 [[ -r "$CONFIG_FILE" ]] || { echo "ERROR: deployment config not found: $CONFIG_FILE" >&2; exit 1; }
+[[ -r "$VERSION_LOCK_FILE" ]] || {
+  echo "ERROR: resolved version lock not found: $VERSION_LOCK_FILE" >&2
+  echo 'Run converge.sh first; check.sh never creates or refreshes the version lock.' >&2
+  exit 1
+}
 [[ -d "$MATRIX_ROOT" ]] || { echo 'ERROR: check.sh is for an existing deployed Matrix installation; use ./bootstrap.sh for a fresh host' >&2; exit 1; }
 
 readarray -t MATRIX_CERT_NAMES < <("$VENV_PYTHON" - "$CONFIG_FILE" <<'PY'
@@ -54,8 +60,12 @@ for path in "${required_state[@]}"; do
 done
 
 cd "$ANSIBLE_DIR"
-"$ANSIBLE_PLAYBOOK" playbooks/preflight.yml --extra-vars "@${CONFIG_FILE}"
+"$ANSIBLE_PLAYBOOK" playbooks/preflight.yml \
+  --extra-vars "@${CONFIG_FILE}" \
+  --extra-vars "@${VERSION_LOCK_FILE}"
+
 exec "$ANSIBLE_PLAYBOOK" playbooks/site.yml \
   --extra-vars "@${CONFIG_FILE}" \
+  --extra-vars "@${VERSION_LOCK_FILE}" \
   --check \
   --diff
