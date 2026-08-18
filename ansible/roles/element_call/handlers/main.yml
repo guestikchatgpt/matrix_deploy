@@ -1,0 +1,6 @@
+---
+- name: Restart Element Call
+  community.docker.docker_container:
+    name: element-call
+    restart: true
+    state: started

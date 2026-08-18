@@ -1,0 +1,6 @@
+---
+- name: Restart Synad
+  community.docker.docker_container:
+    name: "{{ synad_container_name | default('synad') }}" # или просто 'synad', как у вас в тасках
+    restart: true
+    state: started

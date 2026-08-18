@@ -1,0 +1,6 @@
+---
+- name: Restart LiveKit
+  community.docker.docker_container:
+    name: "{{ livekit_container_name | default('livekit') }}"
+    restart: true
+    state: started

@@ -1,0 +1,20 @@
+server {
+    listen 80;
+    server_name _;
+    root {{ nginx_sites_root }};
+
+    location /.well-known/acme-challenge/ {
+        default_type "text/plain";
+        try_files $uri =404;
+    }
+
+    location /.well-known/ {
+        default_type application/json;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 200 "Matrix bootstrap - waiting for TLS provisioning";
+        add_header Content-Type text/plain;
+    }
+}

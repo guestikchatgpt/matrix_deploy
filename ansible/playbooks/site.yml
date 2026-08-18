@@ -1,0 +1,75 @@
+﻿---
+- name: Deploy Matrix Synapse stack
+  hosts: matrix_hosts
+  become: true
+  gather_facts: true
+
+  vars_prompt:
+    - name: matrix_base_domain
+      prompt: "Базовый домен (например example.com)"
+      private: no
+      default: "example.com"
+    - name: certbot_email
+      prompt: "Email для Let's Encrypt"
+      private: no
+    - name: matrix_admin_password
+      prompt: "Пароль администратора Matrix (пользователь admin)"
+      private: yes
+
+  vars:
+    matrix_admin_user: admin
+    matrix_registration_enabled: false
+
+  pre_tasks:
+    - name: Обновить карту поддоменов
+      set_fact:
+        matrix_domains:
+          synapse: "matrix.{{ matrix_base_domain }}"
+          element: "element.{{ matrix_base_domain }}"
+          admin: "synad.{{ matrix_base_domain }}"
+          turn: "turn.{{ matrix_base_domain }}"
+          livekit: "rtc.{{ matrix_base_domain }}"
+          element_call: "call.{{ matrix_base_domain }}"
+
+    - name: Определить внешний IP через ipify
+      uri:
+        url: https://api.ipify.org
+        return_content: true
+        timeout: 10
+      register: ipify_lookup
+      ignore_errors: true
+
+    - name: Установить внешний IP
+      set_fact:
+        matrix_external_ip: "{{ ipify_lookup.content | default(matrix_external_ip) }}"
+
+    - name: Задать путь к секрету TURN
+      set_fact:
+        turn_secret_path: "{{ matrix_root_dir }}/.secrets/turn_shared_secret"
+
+    - name: Подготовить общий секрет для TURN
+      set_fact:
+        turn_shared_secret: "{{ lookup('password', turn_secret_path + ' length=64 chars=ascii_letters,digits') }}"
+      no_log: true
+
+    - name: Подготовить секреты LiveKit
+      set_fact:
+        livekit_api_key: "{{ lookup('password', matrix_root_dir + '/.secrets/livekit_api_key length=20 chars=ascii_uppercase,digits') }}"
+        livekit_api_secret: "{{ lookup('password', matrix_root_dir + '/.secrets/livekit_api_secret length=64 chars=ascii_letters,digits') }}"
+        livekit_turn_secret: "{{ lookup('password', matrix_root_dir + '/.secrets/livekit_turn_secret length=48 chars=ascii_letters,digits') }}"
+      no_log: true
+
+  roles:
+    - role: common
+    - role: docker
+    - role: nginx
+    - role: postgres
+    - role: synapse
+    - role: element_web
+    - role: element_call
+    - role: synad
+    - role: livekit
+    - role: element_jwt
+    - role: coturn
+    - role: firewall
+    - role: verification

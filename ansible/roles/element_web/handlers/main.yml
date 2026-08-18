@@ -1,0 +1,6 @@
+---
+- name: Restart Element Web
+  community.docker.docker_container:
+    name: element-web
+    restart: true
+    state: started

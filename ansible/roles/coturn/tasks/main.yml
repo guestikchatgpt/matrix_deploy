@@ -1,0 +1,80 @@
+---
+- name: Установить coturn
+  ansible.builtin.apt:
+    name: coturn
+    state: present
+    update_cache: true
+
+- name: Создать каталог логов coturn
+  ansible.builtin.file:
+    path: /var/log/turnserver
+    state: directory
+    owner: turnserver
+    group: turnserver
+    mode: "0750"
+
+- name: Сгенерировать пароль для CLI coturn
+  ansible.builtin.set_fact:
+    coturn_cli_password: "{{ lookup('password', matrix_root_dir + '/.secrets/coturn_cli length=32 chars=ascii_letters,digits') }}"
+  no_log: true
+
+- name: Создать dhparam для TLS
+  ansible.builtin.command:
+    cmd: openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048
+    creates: /etc/ssl/certs/dhparam.pem
+
+- name: Создать директорию для сертификатов Coturn
+  ansible.builtin.file:
+    path: /etc/turnserver/certs
+    state: directory
+    owner: turnserver
+    group: turnserver
+    mode: "0750"
+
+- name: Скопировать fullchain для Coturn
+  ansible.builtin.copy:
+    src: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem"
+    dest: "{{ coturn_cert_path }}"
+    owner: turnserver
+    group: turnserver
+    mode: "0640"
+    remote_src: true
+  notify: Restart coturn
+
+- name: Скопировать privkey для Coturn
+  ansible.builtin.copy:
+    src: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/privkey.pem"
+    dest: "{{ coturn_key_path }}"
+    owner: turnserver
+    group: turnserver
+    mode: "0600"
+    remote_src: true
+  notify: Restart coturn
+# ---------------------------------
+
+- name: Включить системный сервис coturn
+  ansible.builtin.lineinfile:
+    path: /etc/default/coturn
+    regexp: '^TURNSERVER_ENABLED='
+    line: 'TURNSERVER_ENABLED=1'
+    create: true
+  notify: Restart coturn
+
+- name: Сконфигурировать coturn
+  ansible.builtin.template:
+    src: turnserver.conf.j2
+    dest: /etc/turnserver.conf
+    owner: turnserver     
+    group: turnserver    
+    mode: "0640"
+  notify: Restart coturn
+
+
+- name: Применить изменения Coturn немедленно
+  ansible.builtin.meta: flush_handlers
+
+- name: Убедиться что coturn запущен
+  ansible.builtin.service:
+    name: coturn
+    state: started
+    enabled: true

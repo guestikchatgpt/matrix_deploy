@@ -1,0 +1,47 @@
+#!/bin/bash
+set -euo pipefail
+
+logger_tag="matrix-cert-renewal"
+
+log() {
+  logger -t "$logger_tag" "$1"
+}
+
+log "Certificate renewal hook started"
+
+if systemctl is-active --quiet nginx; then
+  log "Reloading nginx"
+  systemctl reload nginx
+else
+  log "nginx is not active, skipping reload"
+fi
+
+if [ -d /etc/turnserver/certs ]; then
+  log "Refreshing TURN certificates copy"
+  cp "/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem" /etc/turnserver/certs/fullchain.pem
+  cp "/etc/letsencrypt/live/{{ matrix_domains.turn }}/privkey.pem" /etc/turnserver/certs/privkey.pem
+  chown turnserver:turnserver /etc/turnserver/certs/fullchain.pem /etc/turnserver/certs/privkey.pem
+  chmod 0640 /etc/turnserver/certs/fullchain.pem /etc/turnserver/certs/privkey.pem
+else
+  log "TURN certs directory missing, skipping copy"
+fi
+
+if systemctl is-enabled --quiet coturn 2>/dev/null; then
+  log "Restarting coturn to pick up renewed certificates"
+  systemctl restart coturn
+else
+  log "coturn is not enabled, skipping restart"
+fi
+
+if command -v docker &> /dev/null; then
+  if [ -n "$(docker ps -q -f name=^livekit$)" ]; then
+    log "Restarting LiveKit container to pick up renewed certificates"
+    docker restart livekit
+  else
+    log "LiveKit container is not running, skipping restart"
+  fi
+else
+  log "Docker command not found, skipping container restarts"
+fi
+
+log "Certificate renewal hook finished successfully"

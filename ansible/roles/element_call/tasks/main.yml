@@ -1,0 +1,31 @@
+---
+- name: Создать директорию Element Call
+  ansible.builtin.file:
+    path: "{{ element_call_root }}"
+    state: directory
+    owner: "{{ matrix_system_user }}"
+    group: "{{ matrix_system_group }}"
+    mode: "0755"
+
+- name: Создать config.json для Element Call
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "{{ element_call_root }}/config.json"
+    owner: "{{ matrix_system_user }}"
+    group: "{{ matrix_system_group }}"
+    mode: "0644"
+  notify: Restart Element Call
+
+- name: Развернуть контейнер Element Call
+  community.docker.docker_container:
+    name: element-call
+    image: "{{ element_call_image }}"
+    restart_policy: always
+    pull: true
+    networks:
+      - name: "{{ docker_network_name }}"
+    ports:
+      - "127.0.0.1:{{ element_call_host_port }}:8080"
+    volumes:
+      - "{{ element_call_root }}/config.json:/app/config.json:ro"
+    state: started

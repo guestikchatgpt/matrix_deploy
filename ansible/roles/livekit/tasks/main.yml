@@ -1,0 +1,36 @@
+---
+- name: Создать директорию LiveKit
+  ansible.builtin.file:
+    path: "{{ livekit_root }}"
+    state: directory
+    owner: "{{ matrix_system_user }}"
+    group: "{{ matrix_system_group }}"
+    mode: "0750"
+
+- name: Сформировать конфигурацию LiveKit
+  ansible.builtin.template:
+    src: livekit.yaml.j2
+    dest: "{{ livekit_config_path }}"
+    owner: "{{ matrix_system_user }}"
+    group: "{{ matrix_system_group }}"
+    mode: "0640"
+  notify: Restart LiveKit
+
+- name: Развернуть контейнер LiveKit
+  community.docker.docker_container:
+    name: livekit
+    image: "{{ livekit_image }}"
+    restart_policy: always
+    pull: true
+    network_mode: host
+    user: "0"
+    command:
+      - "--config"
+      - "/etc/livekit.yaml"
+    volumes:
+      - "{{ livekit_config_path }}:/etc/livekit.yaml:ro"
+      - "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem:/etc/ssl/livekit/turn.crt:ro"
+      - "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem:/etc/ssl/livekit/turn.key:ro"
+    env:
+      LIVEKIT_KEYS: "{{ livekit_api_key }}: {{ livekit_api_secret }}"
+    state: started

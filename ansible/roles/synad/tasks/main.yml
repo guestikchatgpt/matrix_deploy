@@ -1,0 +1,31 @@
+---
+- name: Создать директорию Synad
+  ansible.builtin.file:
+    path: "{{ synad_root }}"
+    state: directory
+    owner: "{{ matrix_system_user }}"
+    group: "{{ matrix_system_group }}"
+    mode: "0750"
+
+- name: Создать конфигурацию Synad
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "{{ synad_root }}/config.json"
+    owner: "{{ matrix_system_user }}"
+    group: "{{ matrix_system_group }}"
+    mode: "0640"
+  notify: Restart Synad
+
+- name: Развернуть контейнер Synad
+  community.docker.docker_container:
+    name: synad
+    image: "{{ synad_image }}"
+    restart_policy: always
+    pull: true
+    networks:
+      - name: "{{ docker_network_name }}"
+    published_ports:
+      - "127.0.0.1:{{ synad_host_port }}:8080"
+    volumes:
+      - "{{ synad_root }}/config.json:/app/public/config.json:ro"
+    state: started

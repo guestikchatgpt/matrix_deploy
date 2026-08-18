@@ -1,0 +1,93 @@
+#!/bin/bash
+set -u
+
+LOG_DIR="/var/log"
+LOG_FILE="$LOG_DIR/matrix-stack-verify.log"
+mkdir -p "$LOG_DIR"
+
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+GREEN="\e[32m"
+RED="\e[31m"
+YELLOW="\e[33m"
+RESET="\e[0m"
+
+TARGET_IP="{{ matrix_external_ip | default(ansible_default_ipv4.address, true) }}"
+STATUS=0
+
+print_banner() {
+  echo -e "${YELLOW}================ Проверка Matrix стека ================${RESET}"
+  echo "Время: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+  echo "Целевой IP: $TARGET_IP"
+  echo ""
+}
+
+report() {
+  local label="$1"
+  local code=$2
+  if [ $code -eq 0 ]; then
+    echo -e "[${GREEN}  OK  ${RESET}] $label"
+  else
+    echo -e "[${RED}FAIL${RESET}] $label"
+    STATUS=1
+  fi
+}
+
+run_check() {
+  local label="$1"
+  shift
+  "$@"
+  report "$label" $?
+}
+
+curl_check() {
+  local label="$1"
+  local domain="$2"
+  local path="$3"
+  local opts="--resolve ${domain}:443:$TARGET_IP --silent --show-error --location --fail --max-time 15 --output /dev/null"
+  run_check "$label" bash -c "curl $opts https://${domain}${path}"
+}
+
+print_banner
+
+run_check "Порт 443 (nginx HTTPS)" bash -c "ss -tln | grep -q ':443 '"
+run_check "Порт 8448 (nginx federation)" bash -c "ss -tln | grep -q ':8448 '"
+run_check "Порт 5349 (coturn TLS)" bash -c "ss -tln | grep -q ':5349 '"
+run_check "Порт {{ livekit_ws_port }} (LiveKit WS)" bash -c "ss -tln | grep -q ':{{ livekit_ws_port }} '"
+
+run_check "Сервис docker активен" systemctl is-active --quiet docker
+run_check "Сервис nginx активен" systemctl is-active --quiet nginx
+run_check "Сервис coturn активен" systemctl is-active --quiet coturn
+
+containers=(synapse element-web element-call synad element-jwt livekit)
+for c in "${containers[@]}"; do
+  run_check "Контейнер $c запущен" bash -c "docker ps --format '{% raw %}{{.Names}}{% endraw %}' | grep -Fxq '$c'"
+done
+
+run_check "Synapse API (localhost)" curl -sf http://127.0.0.1:8008/_matrix/client/versions > /dev/null
+run_check "Element JWT (localhost)" curl -sf http://127.0.0.1:{{ element_jwt_port }}/healthz > /dev/null
+
+curl_check "Synapse API /_matrix/client/versions" "{{ matrix_domains.synapse }}" "/_matrix/client/versions"
+curl_check "Element Web доступен" "{{ matrix_domains.element }}" "/"
+curl_check "Synapse Admin (Synad) доступен" "{{ matrix_domains.admin }}" "/"
+curl_check "Element Call доступен" "{{ matrix_domains.element_call }}" "/"
+curl_check "LiveKit JWT HTTPS" "{{ matrix_domains.livekit }}" "/livekit/jwt/healthz"
+
+if [ $STATUS -eq 0 ]; then
+  echo -e "${GREEN}Все проверки пройдены успешно.${RESET}"
+else
+  echo -e "${RED}Некоторые проверки провалены. См. лог для деталей.${RESET}"
+fi
+
+echo ""
+echo "Ссылки на сервисы:"
+echo " - Synapse:       https://{{ matrix_domains.synapse }}/"
+echo " - Element Web:   https://{{ matrix_domains.element }}/"
+echo " - Synapse Admin: https://{{ matrix_domains.admin }}/"
+echo " - Element Call:  https://{{ matrix_domains.element_call }}/"
+echo " - LiveKit JWT:   https://{{ matrix_domains.livekit }}/livekit/jwt/healthz"
+echo " - TURN URI:      turn:{{ matrix_domains.turn }}:3478?transport=udp"
+
+echo -e "Лог лежит в: $LOG_FILE"
+
+exit $STATUS

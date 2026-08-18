@@ -1,0 +1,55 @@
+---
+- name: Проверить поддержку репозитория Docker для текущего дистрибутива
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == "Ubuntu"
+      - ansible_distribution_release in ["noble", "jammy", "focal"]
+    fail_msg: "Официальный репозиторий Docker не поддерживает {{ ansible_distribution }} {{ ansible_distribution_release }}. Проверьте https://docs.docker.com/engine/install/ и при необходимости обновите плейбук."
+
+- name: Создать директорию для ключей apt
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Добавить GPG ключ Docker
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+
+- name: Добавить репозиторий Docker
+  ansible.builtin.apt_repository:
+    repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    filename: docker
+    state: present
+
+- name: Установить Docker Engine
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Включить и запустить Docker
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Добавить пользователя Matrix в группу docker
+  ansible.builtin.user:
+    name: "{{ matrix_system_user }}"
+    groups: docker
+    append: true
+
+- name: Создать docker сеть
+  community.docker.docker_network:
+    name: "{{ docker_network_name }}"
+    state: present
+    ipam_config:
+      - subnet: "{{ docker_network_subnet }}"

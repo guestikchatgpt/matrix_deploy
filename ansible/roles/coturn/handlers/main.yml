@@ -1,0 +1,5 @@
+---
+- name: Restart coturn
+  ansible.builtin.service:
+    name: coturn
+    state: restarted

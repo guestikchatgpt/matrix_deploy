@@ -1,0 +1,26 @@
+log_level: info
+bind_addresses:
+  - 0.0.0.0
+port: {{ livekit_http_port }}
+keys:
+ {{ livekit_api_key }}: {{ livekit_api_secret }}
+
+rtc:
+  tcp_port: {{ livekit_rtc_tcp_port }}
+  port_range_start: {{ livekit_port_range_start }}
+  port_range_end: {{ livekit_port_range_end }}
+  use_external_ip: false
+  node_ip: "{{ matrix_external_ip | default(ansible_default_ipv4.address, true) }}"
+
+turn:
+  enabled: true
+  udp_port: {{ livekit_turn_udp_port }}
+  tls_port: {{ livekit_turn_tls_port }}
+  domain: {{ matrix_domains.livekit }}
+  external_tls: false
+  cert_file: /etc/ssl/livekit/turn.crt
+  key_file:  /etc/ssl/livekit/turn.key
+
+room:
+  enable_remote_unmute: false
+  auto_create: true

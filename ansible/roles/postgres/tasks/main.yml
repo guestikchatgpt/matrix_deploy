@@ -1,0 +1,55 @@
+---
+- name: Ensure PostgreSQL data dir
+  ansible.builtin.file:
+    path: "{{ matrix_root_dir }}/postgres/data"
+    state: directory
+    owner: 999
+    group: 999
+    mode: "0700"
+
+- name: Generate password for Synapse DB user
+  ansible.builtin.set_fact:
+    postgresql_synapse_password: "{{ lookup('password', matrix_root_dir + '/.secrets/postgres_synapse_password length=' + (postgresql_synapse_password_length | string)) }}"
+  no_log: true
+
+- name: Run PostgreSQL container
+  community.docker.docker_container:
+    name: postgres
+    image: "{{ postgresql_image }}"
+    restart_policy: always
+    pull: true
+    user: "999:999"
+    env:
+      POSTGRES_DB: "{{ postgresql_synapse_db }}"
+      POSTGRES_USER: "{{ postgresql_synapse_user }}"
+      POSTGRES_PASSWORD: "{{ postgresql_synapse_password }}"
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_INITDB_ARGS: "--data-checksums --encoding=UTF8 --locale=C --lc-collate=C --lc-ctype=C"
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    volumes:
+      - "{{ matrix_root_dir }}/postgres/data:/var/lib/postgresql/data"
+    published_ports:
+      - "127.0.0.1:{{ postgresql_host_port }}:5432"
+    networks:
+      - name: "{{ docker_network_name }}"
+        aliases:
+          - postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{ postgresql_synapse_user }} -d {{ postgresql_synapse_db }}"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    state: started
+
+- name: Wait for PostgreSQL to be available
+  community.postgresql.postgresql_ping:
+    login_host: "127.0.0.1"
+    login_port: "{{ postgresql_host_port }}"
+    login_user: "{{ postgresql_synapse_user }}"
+    login_password: "{{ postgresql_synapse_password }}"
+    db: "{{ postgresql_synapse_db }}"
+  register: pg_ping
+  retries: 20
+  delay: 3
+  until: pg_ping is succeeded

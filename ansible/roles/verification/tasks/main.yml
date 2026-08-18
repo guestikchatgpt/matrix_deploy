@@ -1,0 +1,22 @@
+﻿---
+- name: Развернуть скрипт проверки стека
+  ansible.builtin.template:
+    src: verify.sh.j2
+    dest: /usr/local/bin/matrix-stack-verify.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Запустить проверочный скрипт
+  ansible.builtin.command: /usr/local/bin/matrix-stack-verify.sh
+  register: verification_run
+  changed_when: false
+
+- name: Вывести результат проверки
+  ansible.builtin.debug:
+    msg: "{{ verification_run.stdout }}"
+
+- name: В случае ошибки выдать вывод stderr
+  ansible.builtin.debug:
+    msg: "{{ verification_run.stderr }}"
+  when: verification_run.rc != 0

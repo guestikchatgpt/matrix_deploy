@@ -1,0 +1,69 @@
+- name: Установить ufw
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+    update_cache: true
+
+- name: Разрешить SSH
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+
+- name: Разрешить веб-порты
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - "80"
+    - "443"
+    - "8448"
+
+- name: Разрешить порты TURN TCP
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - "{{ coturn_udp_port }}"
+    - "{{ coturn_tls_port }}"
+    - "{{ livekit_turn_tls_port }}"
+
+- name: Разрешить порты TURN UDP
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: udp
+  loop:
+    - "{{ coturn_udp_port }}"
+    - "{{ coturn_tls_port }}"
+    - "{{ livekit_turn_udp_port }}"
+
+- name: Разрешить порты LiveKit TCP
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - "{{ livekit_http_port }}"
+    - "{{ livekit_ws_port }}"
+    - "{{ livekit_rtc_tcp_port }}"
+
+- name: Разрешить диапазон реле TURN
+  community.general.ufw:
+    rule: allow
+    port: "{{ coturn_min_port }}:{{ coturn_max_port }}"
+    proto: udp
+
+- name: Разрешить диапазон LiveKit SFU
+  community.general.ufw:
+    rule: allow
+    port: "{{ livekit_port_range_start }}:{{ livekit_port_range_end }}"
+    proto: udp
+
+- name: Включить UFW с политикой deny incoming
+  community.general.ufw:
+    state: enabled
+    policy: deny
+    direction: incoming

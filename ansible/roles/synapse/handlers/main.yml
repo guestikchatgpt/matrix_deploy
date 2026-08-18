@@ -1,0 +1,6 @@
+---
+- name: Restart Synapse
+  community.docker.docker_container:
+    name: "{{ synapse_container_name }}"
+    restart: true
+    state: started

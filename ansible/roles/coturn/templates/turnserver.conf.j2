@@ -1,0 +1,24 @@
+# Managed by Ansible
+listening-port={{ coturn_udp_port }}
+tls-listening-port={{ coturn_tls_port }}
+listening-ip=0.0.0.0
+relay-ip={{ matrix_external_ip | default(ansible_default_ipv4.address, true) }}
+external-ip={{ matrix_external_ip | default(ansible_default_ipv4.address, true) }}
+min-port={{ coturn_min_port }}
+max-port={{ coturn_max_port }}
+fingerprint
+lt-cred-mech
+use-auth-secret
+static-auth-secret={{ turn_shared_secret }}
+server-name={{ matrix_domains.turn }}
+realm={{ matrix_domains.turn }}
+cert={{ coturn_cert_path }}
+pkey={{ coturn_key_path }}
+no-stdout-log
+log-file=/var/log/turnserver/turn.log
+no-multicast-peers
+no-loopback-peers
+no-tlsv1
+no-tlsv1_1
+dh-file=/etc/ssl/certs/dhparam.pem
+cli-password={{ coturn_cli_password }}
