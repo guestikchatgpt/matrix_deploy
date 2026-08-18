@@ -104,6 +104,16 @@
       not an administrator. Refusing to change privileges implicitly.
   no_log: true
 
+- name: Require admin password only for initial admin creation
+  ansible.builtin.assert:
+    that:
+      - matrix_admin_password | default('') | length > 0
+    fail_msg: >-
+      Matrix admin does not exist yet. Supply matrix_admin_password for the
+      initial deployment; later converges do not require the password.
+  when: synapse_admin_db_state.stdout | trim == '-1'
+  no_log: true
+
 - name: Create Synapse admin user when it does not exist
   community.docker.docker_container_exec:
     container: "{{ synapse_container_name }}"
@@ -114,7 +124,7 @@
       - --user
       - "{{ matrix_admin_user }}"
       - --password
-      - "{{ matrix_admin_password }}"
+      - "{{ matrix_admin_password | default('') }}"
       - --admin
       - http://localhost:8008
   when: synapse_admin_db_state.stdout | trim == '-1'
