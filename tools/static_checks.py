@@ -74,6 +74,18 @@ if len(latest_refs) != 1 or "ghcr.io/etkecc/ketesa:latest" not in latest_refs[0]
     rendered = ", ".join(f"{p.relative_to(ROOT)}: {line}" for p, line in latest_refs) or "none"
     errors.append(f"Unexpected :latest image references; Ketesa must be the only explicit exception: {rendered}")
 
+# Avoid the SIGPIPE false-negative class already observed with pipefail. Shell
+# code should capture producer output first, then grep a here-string/file.
+for path in sorted(ROOT.rglob("*")):
+    if not path.is_file() or path.suffix not in {".sh", ".j2"}:
+        continue
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        continue
+    if re.search(r"\|\s*grep\b", text):
+        errors.append(f"Unsafe producer | grep pipeline: {path.relative_to(ROOT)}")
+
 if errors:
     print("STATIC CHECKS FAILED", file=sys.stderr)
     for error in errors:
