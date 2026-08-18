@@ -90,9 +90,9 @@
   when: not nginx_web_cert_complete | bool
   notify: Reload Nginx
 
-- name: Install HTTP bootstrap configuration when certificates are incomplete
+- name: Install HTTP bootstrap configuration while the main TLS lineage is incomplete
   ansible.builtin.template: {src: matrix-bootstrap.conf.j2, dest: /etc/nginx/conf.d/00-matrix-bootstrap.conf, owner: root, group: root, mode: '0644'}
-  when: not (nginx_web_cert_complete | bool and nginx_turn_cert_complete | bool)
+  when: not nginx_web_cert_complete | bool
   notify: Reload Nginx
 
 - name: Ensure Nginx is enabled and started
@@ -105,12 +105,12 @@
 
 - name: Install ACME-safe production configuration before certificate reconciliation
   ansible.builtin.template: {src: matrix.conf.j2, dest: /etc/nginx/conf.d/10-matrix.conf, owner: root, group: root, mode: '0644'}
-  when: nginx_web_cert_complete | bool and nginx_turn_cert_complete | bool
+  when: nginx_web_cert_complete | bool
   notify: Reload Nginx
 - name: Validate pre-reconciliation Nginx configuration
   ansible.builtin.command: nginx -t
   changed_when: false
-  when: nginx_web_cert_complete | bool and nginx_turn_cert_complete | bool
+  when: nginx_web_cert_complete | bool
 - name: Apply ACME-safe Nginx routing before certificate reconciliation
   ansible.builtin.meta: flush_handlers
 
