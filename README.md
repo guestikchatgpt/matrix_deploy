@@ -60,9 +60,9 @@ The launcher asks for:
 - NAT/direct-public TURN topology;
 - initial Matrix administrator password.
 
-It detects the active SSH port, persists non-secret topology in
-`/etc/matrix-deploy/deployment.yml`, runs preflight, prints the deployment plan,
-and requires confirmation before the main playbook runs.
+It detects the active SSH session port, validates operator input, persists
+non-secret topology in `/etc/matrix-deploy/deployment.yml`, runs preflight, prints
+the deployment plan, and requires confirmation before the main playbook runs.
 
 To prepare only the Ansible environment without starting the interactive deploy:
 
@@ -79,8 +79,9 @@ checks include:
 - effective root privileges;
 - minimum CPU/RAM/free disk;
 - valid public and relay IPv4 values;
-- direct-public versus NAT consistency;
-- DNS A records for all Matrix service hostnames;
+- exact local-IP consistency for direct-public versus NAT mode;
+- DNS A records for all Matrix service hostnames, with no stray additional A
+  addresses;
 - unexpected AAAA records while IPv6 mode is disabled;
 - fresh-host port conflicts;
 - apt repository reachability.
@@ -100,15 +101,31 @@ sudo ./converge.sh
 Uses `/etc/matrix-deploy/deployment.yml`; it does not prompt for the Matrix admin
 password when the existing admin account is already present.
 
+If the first deployment was interrupted after topology was saved but before the
+initial `@admin` account was created, resume without re-entering the topology:
+
+```bash
+sudo ./converge.sh --admin-password
+```
+
+The recovery password is read without echo, stored only in a temporary
+`/run/matrix-deploy/` file for the Ansible invocation and removed by a shell
+trap. It is not persisted in `/etc/matrix-deploy`.
+
 ### Ansible check/diff
 
 ```bash
 sudo ./check.sh
 ```
 
-Runs preflight followed by `site.yml --check --diff`. Some modules/services can
-never provide a perfect simulation; this is a review tool, not a substitute for
-the final verifier.
+`check.sh` is for an existing or partially deployed installation. It runs
+preflight followed by `site.yml --check --diff`. Runtime reconciliation and
+health probes that cannot be meaningfully simulated are skipped in check mode;
+certificate SAN state is still read and the playbook reports whether each
+lineage would require reconciliation.
+
+Check mode is a desired-state review tool, not a substitute for a real converge
+and the final verifier.
 
 ### Verify
 
@@ -121,6 +138,15 @@ PostgreSQL, Synapse client/federation endpoints, local/private metrics behavior,
 web applications, MatrixRTC discovery, both TURN stacks, TLS certificates,
 certificate-copy consistency, Certbot/ACME routing, Fail2ban and Nginx syntax.
 
+The normal verifier is deliberately **NAT-safe**. Service self-checks connect to
+local listeners through `127.0.0.1` while preserving the correct HTTP Host/TLS
+SNI. A NAT deployment therefore does not require hairpin NAT merely to verify
+its own Nginx/TURN configuration.
+
+This also means the normal verifier does not claim to prove Internet-side
+reachability. External federation, TURN relay and MatrixRTC behavior remain
+release/integration tests.
+
 For the expensive certificate renewal simulation:
 
 ```bash
@@ -132,6 +158,9 @@ This additionally runs:
 ```text
 certbot renew --dry-run --run-deploy-hooks
 ```
+
+The Certbot staging validation is an external ACME reachability check and also
+exercises the lineage-selective deploy hooks.
 
 ### Backup
 
@@ -150,8 +179,12 @@ sudo ./backup.sh --include-media
 Backups are written under `/var/backups/matrix-deploy/<timestamp>/` with mode
 `0700`. They contain a PostgreSQL custom-format dump, managed secrets/config,
 Synapse signing key/appservice state, certificate state, Docker/UFW inventories,
-and a manifest. The raw PostgreSQL data directory is intentionally not archived;
-PostgreSQL is backed up logically with `pg_dump`.
+and a manifest. Backup artifacts are forced to root-only `0600`; this matters in
+particular for `docker-inspect.json`, which can contain container environment
+secrets.
+
+The raw PostgreSQL data directory is intentionally not archived; PostgreSQL is
+backed up logically with `pg_dump`.
 
 A routine backup does **not** include the potentially large media store unless
 `--include-media` is specified.
@@ -164,7 +197,9 @@ sudo ./upgrade.sh
 
 `upgrade.sh` requires confirmation, creates a backup first, then performs a normal
 converge. Routine `converge.sh` does not use `pull: true` and therefore is not an
-implicit "upgrade everything to latest" operation.
+implicit "upgrade everything to latest" operation. PostgreSQL additionally has a
+major-version data-directory guard, so changing the configured major cannot
+silently start an incompatible database image.
 
 ### Destroy
 
@@ -229,14 +264,28 @@ There are two Let's Encrypt lineages:
 2. a separate legacy TURN certificate.
 
 Every HTTP vhost serves `/.well-known/acme-challenge/` directly from the shared
-webroot before redirecting normal HTTP traffic. The Certbot deploy hook is
-lineage-aware:
+webroot before redirecting normal HTTP traffic. The role reconciles the actual
+SAN set, can recover an incomplete lineage, and does not rely on `creates:` as
+certificate state.
+
+The Certbot deploy hook is lineage-aware:
 
 - Matrix SAN renewal reloads Nginx and refreshes/restarts LiveKit only;
 - TURN renewal refreshes/restarts Coturn only.
 
 LiveKit consumes a stable certificate copy under `/opt/matrix/livekit/certs`
 rather than bind-mounting individual Let's Encrypt symlink targets.
+
+## Synapse Admin endpoint
+
+The general Synapse hardening rule is to avoid publishing unnecessary
+`/_synapse/` endpoints. This deployment exposes only `/_synapse/client/` and
+`/_synapse/admin/`, and returns 404 for the remaining `/_synapse/` namespace.
+
+`/_synapse/admin/` is an intentional architecture choice here: Ketesa is a
+browser-side administration UI and needs the Synapse Admin API. Access still
+requires Matrix administrator authentication. Synapse metrics remain private and
+are checked locally only.
 
 ## Fail2ban
 
@@ -263,6 +312,10 @@ Important paths:
 Do not commit `/etc/matrix-deploy`, `.venv`, generated secrets, certificates or
 backup archives.
 
+The system `matrix` service account is deliberately not a member of the Docker
+group; Docker socket access is root-equivalent and is not required by the
+applications.
+
 ## CI and release gates
 
 GitHub Actions performs:
@@ -272,9 +325,12 @@ GitHub Actions performs:
 - pinned Ansible/collection installation;
 - inventory parsing;
 - `ansible-playbook --syntax-check` for deploy, preflight, verification, backup
-  and destroy playbooks.
+  and destroy playbooks;
+- actual Jinja rendering of the verifier with federation both enabled and
+  disabled, followed by `bash -n` on both rendered scripts.
 
 Static CI is necessary but not sufficient. Before a release candidate is merged,
 run the remaining integration gates from `ROADMAP.md`: clean Ubuntu deployment,
-second converge, reboot persistence, Certbot dry-run, federation, legacy TURN and
-MatrixRTC calls.
+second converge/idempotence, `check.sh`, reboot persistence, Certbot dry-run,
+federation, legacy TURN and MatrixRTC calls, plus backup/destroy/restore rehearsal
+before restore automation is exposed.
