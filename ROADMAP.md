@@ -13,7 +13,9 @@
 - Федерация — реальный feature flag и должна последовательно управлять Synapse, Nginx, UFW, well-known данными и verification.
 - Секреты не должны попадать в Git.
 - Перед destructive-операциями и обновлениями существующая установка должна резервироваться.
-- Обычный converge не должен незаметно обновлять все container images.
+- Обычный converge не должен незаметно обновлять application images.
+- Новое развёртывание должно использовать актуальные stable releases upstream, но конкретный deploy обязан оставаться воспроизводимым через exact runtime lock.
+- Major PostgreSQL не должен повышаться автоматически.
 
 ## P0 — исправления, проверенные на production
 
@@ -46,15 +48,27 @@
 - Исправить readiness-логику PostgreSQL: проверять результат модуля, а не общий успех task.
 - Добавить guard major-version/data-directory перед обновлением контейнера.
 - Сохранить поведение PostgreSQL 18 с `PGDATA=/var/lib/postgresql/data/pgdata`.
+- Resolver версий должен автоматически двигаться только по stable patch releases внутри `postgresql_major`; смена major остаётся отдельной миграцией.
 
 ## Версии и обновления
 
-- Ввести протестированную матрицу версий контейнеров.
-- Обычный запуск `site.yml` должен применять конфигурацию, не обновляя контейнерные образы незаметно.
-- Обновления должны быть отдельным явным workflow: backup, compatibility checks, deployment, verification и информация для rollback.
-- Зафиксировать версии Ansible collections после проверки совместимости.
-- Каждый application image закрепить на опубликованном release tag; плавающие `latest` в матрице релиз-кандидата не допускаются.
-- Проверять каждый pinned image в CI через registry и требовать наличие manifest для linux/amd64 и linux/arm64.
+Целевая модель больше не предполагает ручное обновление release tags в Git каждые несколько недель.
+
+- `ansible/inventory/group_vars/all/versions.yml` содержит **политику источников**, а не текущие application versions.
+- Для приложений latest stable release определяется через GitHub Releases.
+- Docker Hub images дополнительно сверяются через Docker Hub API.
+- Все Docker Hub/GHCR refs проверяются через registry inspection для архитектуры хоста.
+- Для PostgreSQL используется metadata Docker Official Images и выбирается последний stable patch в разрешённом major.
+- Результат preflight сохраняется как exact runtime lock `/etc/matrix-deploy/versions.yml`.
+- Docker-role заранее скачивает именно exact refs из lock до запуска application stack.
+- Обычный `converge.sh` проверяет upstream, но не меняет lock.
+- `upgrade.sh` сначала создаёт backup, затем явно обновляет lock и применяет новый набор.
+- При недоступности upstream обычный converge может продолжать работать с существующим lock; fresh deploy/explicit upgrade должны завершаться ошибкой, если новый набор невозможно надёжно разрешить и проверить.
+- `site.yml` не должен выполнять deployment mutation без валидного version lock.
+- Плавающие `:latest` в runtime lock и hardcoded top-level `*_image` pins в repository policy запрещены static checks.
+- CI должен реально выполнять resolver, проверять exact refs и multiarch manifests.
+- CI должен доказывать, что повторный обычный preflight не переписывает существующий lock.
+- Версии `ansible-core` и collections остаются зафиксированными как runtime самого установщика и обновляются отдельно после compatibility validation.
 - Не использовать deprecated top-level injection Ansible facts; роли должны обращаться через `ansible_facts[...]`, а injection должна быть отключена.
 - Сторонние apt-репозитории должны управляться через deb822 sources, а не deprecated task `apt_repository`.
 
@@ -108,37 +122,46 @@
 - определение NAT/direct-public;
 - определение SSH-порта;
 - обнаружение существующей installation/config/certificates;
+- определение и registry-validation актуальных stable application versions;
+- сохранение exact version lock;
 - вывод явного deployment plan и запрос подтверждения.
 
 Bootstrap остаётся orchestration UX; логика Matrix-сервисов должна находиться в Ansible roles.
 
 ## Lifecycle workflows
 
-Предоставить явные workflows для backup, upgrade, rollback metadata и destroy. Destroy должен требовать строгого подтверждения и не должен незаметно удалять последнюю резервную копию.
+Предоставить явные workflows для backup, upgrade, rollback metadata и destroy. Destroy должен требовать строгого подтверждения и не должен незаметно удалять последнюю резервную копию. Runtime version lock входит в operational state и должен попадать в backup/restore.
 
 ## Критерии проверки
 
 Перед тем как считать релиз-кандидат завершённым, нужно пройти:
 
 1. syntax/static checks;
-2. развёртывание на чистой Ubuntu 24.04;
-3. второй запуск Ansible без непредусмотренных изменений;
-4. проверку desired state установленного хоста через `check.sh`;
-5. тест сохранения состояния после reboot;
-6. Certbot dry-run с deploy hooks;
-7. проверку входящей и исходящей федерации;
-8. проверку relay классического TURN;
-9. локальные и federated MatrixRTC audio/video calls, по возможности с проверкой встроенного TURN relay;
-10. rehearsal backup/destroy/restore на disposable host;
-11. финальный verifier без обязательных FAIL.
+2. runtime resolution stable-версий и проверку registry;
+3. развёртывание на чистой Ubuntu 24.04;
+4. второй запуск Ansible без непредусмотренных изменений и без изменения version lock;
+5. проверку desired state установленного хоста через `check.sh`;
+6. тест сохранения состояния после reboot;
+7. Certbot dry-run с deploy hooks;
+8. проверку входящей и исходящей федерации;
+9. проверку relay классического TURN;
+10. локальные и federated MatrixRTC audio/video calls, по возможности с проверкой встроенного TURN relay;
+11. rehearsal backup/destroy/restore на disposable host;
+12. финальный verifier без обязательных FAIL.
 
 ## Статус реализации — `agent/roadmap-hardening`
 
 ### Реализовано в коде
 
 - [x] Универсальная модель topology/subdomains; в исполняемом коде нет hard-coded production domain/IP.
-- [x] Зафиксированы версии controller/collections и release tags всех application images.
-- [x] CI проверяет каждый application image в registry, включая manifest linux/amd64 и linux/arm64.
+- [x] Динамический resolver актуальных stable application releases через GitHub Releases + Docker Official Images/Docker Hub + registry validation.
+- [x] Exact runtime version lock `/etc/matrix-deploy/versions.yml`; application release tags больше не требуют ручного изменения в репозитории.
+- [x] PostgreSQL автоматически обновляется только внутри разрешённого major.
+- [x] Docker-role заранее скачивает exact image refs из lock до запуска application stack.
+- [x] Обычный converge не переписывает lock; explicit upgrade выполняет backup -> refresh lock -> converge.
+- [x] CI реально выполняет dynamic resolver и проверяет каждый выбранный image в registry, включая manifest linux/amd64 и linux/arm64.
+- [x] Static checks запрещают возврат hardcoded top-level application image pins и `:latest`.
+- [x] Зафиксированы версии controller/collections для воспроизводимости самого установщика.
 - [x] Интерактивный bootstrap/launcher с сохранением topology, input validation и preflight.
 - [x] CI реально запускает `bootstrap.sh --prepare-only` на runner Ubuntu 24.04.
 - [x] CI реально запускает NAT-mode preflight с настоящим DNS A/AAAA resolution и проверками ресурсов, портов, routing и apt.
@@ -161,7 +184,7 @@ Bootstrap остаётся orchestration UX; логика Matrix-сервисо�
 - [x] Ограничены Docker container logs; service account Matrix не получает привилегии через группу Docker.
 - [x] `converge.sh`, check-mode-aware `check.sh`, backup-first `upgrade.sh` и защищённый `destroy.sh`.
 - [x] Защищённый формат backup с root-only artifacts; destructive destroy требует полный backup с media Synapse.
-- [x] GitHub Actions gate для static/YAML/shell/Ansible syntax.
+- [x] GitHub Actions gate для static/YAML/shell/Python/Ansible syntax.
 - [x] CI рендерит и shell-валидирует варианты verifier с включённой и отключённой федерацией.
 - [x] README оператора и явный restore runbook/contract.
 
@@ -174,13 +197,13 @@ Bootstrap остаётся orchestration UX; логика Matrix-сервисо�
 
 ### Release gates, для которых всё ещё нужен disposable/реальный Ubuntu-хост
 
-- [ ] Полная чистая установка Ubuntu 24.04 через `bootstrap.sh` с реальными DNS проекта и Let's Encrypt.
-- [ ] Второй запуск `converge.sh` без непредусмотренных изменений.
+- [ ] Полная чистая установка Ubuntu 24.04 через `bootstrap.sh` с реальными DNS проекта и Let's Encrypt, используя динамически выбранный exact version lock.
+- [ ] Второй запуск `converge.sh` без непредусмотренных изменений и без изменения lock.
 - [ ] `check.sh` на установленном хосте; проверить полезность diff и отсутствие ложных runtime failures.
 - [ ] Reboot и проверка persistence.
 - [ ] `verify.sh --deep` / staging renewal Certbot на clean-host deployment.
 - [ ] Проверка входящей и исходящей федерации, если она включена.
 - [ ] Authenticated relay test классического Coturn.
 - [ ] Локальные и federated MatrixRTC audio/video calls; подтвердить доступность embedded TURN relay.
-- [ ] Полный rehearsal backup -> destroy -> restore до включения автоматического restore.
+- [ ] Полный rehearsal backup -> destroy -> restore до включения автоматического restore; восстановить именно сохранённый version lock, а не молча выбирать новые версии во время disaster recovery.
 - [ ] Финальный verifier без обязательных FAIL на release-candidate host.
