@@ -100,6 +100,7 @@
 - name: Validate bootstrap Nginx configuration
   ansible.builtin.command: nginx -t
   changed_when: false
+  when: not ansible_check_mode
 - name: Apply bootstrap Nginx configuration before ACME
   ansible.builtin.meta: flush_handlers
 
@@ -110,12 +111,15 @@
 - name: Validate pre-reconciliation Nginx configuration
   ansible.builtin.command: nginx -t
   changed_when: false
-  when: nginx_web_cert_complete | bool
+  when:
+    - nginx_web_cert_complete | bool
+    - not ansible_check_mode
 - name: Apply ACME-safe Nginx routing before certificate reconciliation
   ansible.builtin.meta: flush_handlers
 
 - name: Create pre-ACME challenge probe
   ansible.builtin.copy: {dest: "{{ nginx_sites_root }}/.well-known/acme-challenge/matrix-preflight", content: "matrix-acme-ok\n", owner: www-data, group: www-data, mode: '0644'}
+  when: not ansible_check_mode
 - name: Verify HTTP-01 routing locally
   ansible.builtin.uri:
     url: http://127.0.0.1/.well-known/acme-challenge/matrix-preflight
@@ -125,8 +129,10 @@
   loop: "{{ matrix_certbot_web_domains + [matrix_domains.turn] }}"
   register: nginx_acme_probe
   failed_when: nginx_acme_probe.content | default('') | trim != 'matrix-acme-ok'
+  when: not ansible_check_mode
 - name: Remove pre-ACME challenge probe
   ansible.builtin.file: {path: "{{ nginx_sites_root }}/.well-known/acme-challenge/matrix-preflight", state: absent}
+  when: not ansible_check_mode
 
 - name: Read Matrix certificate SANs
   ansible.builtin.command: >-
@@ -134,6 +140,7 @@
   register: nginx_web_cert_sans
   changed_when: false
   failed_when: false
+  check_mode: false
   when: nginx_web_cert_complete | bool
 - name: Read TURN certificate SANs
   ansible.builtin.command: >-
@@ -141,12 +148,26 @@
   register: nginx_turn_cert_sans
   changed_when: false
   failed_when: false
+  check_mode: false
   when: nginx_turn_cert_complete | bool
 
 - name: Determine certificate reconciliation requirements
   ansible.builtin.set_fact:
     nginx_web_cert_actual_domains: "{{ (nginx_web_cert_sans.stdout | default('') | regex_findall('DNS:([^,\\s]+)')) | sort }}"
     nginx_turn_cert_actual_domains: "{{ (nginx_turn_cert_sans.stdout | default('') | regex_findall('DNS:([^,\\s]+)')) | sort }}"
+    nginx_web_cert_needs_reconcile: >-
+      {{ (not nginx_web_cert_complete | bool) or
+         ((nginx_web_cert_sans.stdout | default('') | regex_findall('DNS:([^,\\s]+)') | sort) != (matrix_certbot_web_domains | sort)) }}
+    nginx_turn_cert_needs_reconcile: >-
+      {{ (not nginx_turn_cert_complete | bool) or
+         ((nginx_turn_cert_sans.stdout | default('') | regex_findall('DNS:([^,\\s]+)') | sort) != ([matrix_domains.turn] | sort)) }}
+
+- name: Report certificate reconciliation during check mode
+  ansible.builtin.debug:
+    msg:
+      - "Matrix SAN certificate would be reconciled: {{ nginx_web_cert_needs_reconcile | bool }}"
+      - "TURN certificate would be reconciled: {{ nginx_turn_cert_needs_reconcile | bool }}"
+  when: ansible_check_mode
 
 - name: Reconcile Matrix SAN certificate
   ansible.builtin.command: >-
@@ -154,7 +175,9 @@
     --non-interactive --agree-tos --email {{ certbot_email | quote }}
     --cert-name {{ matrix_domains.synapse | quote }} --force-renewal
     {% for domain in matrix_certbot_web_domains %}-d {{ domain | quote }} {% endfor %}
-  when: (not nginx_web_cert_complete | bool) or ((nginx_web_cert_actual_domains | sort) != (matrix_certbot_web_domains | sort))
+  when:
+    - not ansible_check_mode
+    - nginx_web_cert_needs_reconcile | bool
   register: certbot_web
   changed_when: certbot_web.rc == 0
 
@@ -163,7 +186,9 @@
     certbot certonly --webroot --webroot-path {{ nginx_sites_root | quote }}
     --non-interactive --agree-tos --email {{ certbot_email | quote }}
     --cert-name {{ matrix_domains.turn | quote }} --force-renewal -d {{ matrix_domains.turn | quote }}
-  when: (not nginx_turn_cert_complete | bool) or ((nginx_turn_cert_actual_domains | sort) != ([matrix_domains.turn] | sort))
+  when:
+    - not ansible_check_mode
+    - nginx_turn_cert_needs_reconcile | bool
   register: certbot_turn
   changed_when: certbot_turn.rc == 0
 
@@ -186,19 +211,25 @@
       - nginx_web_key_after.stat.exists
       - nginx_turn_cert_after.stat.exists
       - nginx_turn_key_after.stat.exists
+  when: not ansible_check_mode
 
 - name: Check Matrix certificate validity
   ansible.builtin.command: "openssl x509 -in /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem -checkend 0 -noout"
   changed_when: false
+  check_mode: false
+  when: nginx_web_cert_complete | bool
 - name: Check TURN certificate validity
   ansible.builtin.command: "openssl x509 -in /etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem -checkend 0 -noout"
   changed_when: false
+  check_mode: false
+  when: nginx_turn_cert_complete | bool
 
 - name: Install selective Certbot deploy hook
   ansible.builtin.template: {src: renewal-hook.sh.j2, dest: /etc/letsencrypt/renewal-hooks/deploy/matrix-stack.sh, owner: root, group: root, mode: '0755'}
 - name: Validate Certbot deploy hook syntax
   ansible.builtin.command: bash -n /etc/letsencrypt/renewal-hooks/deploy/matrix-stack.sh
   changed_when: false
+  when: not ansible_check_mode
 - name: Enable Certbot renewal timer
   ansible.builtin.systemd: {name: certbot.timer, enabled: true, state: started}
 
@@ -211,5 +242,6 @@
 - name: Validate production Nginx configuration
   ansible.builtin.command: nginx -t
   changed_when: false
+  when: not ansible_check_mode
 - name: Apply production Nginx configuration
   ansible.builtin.meta: flush_handlers
