@@ -27,7 +27,7 @@
     published_ports:
       - "127.0.0.1:{{ element_web_host_port }}:80"
     volumes:
-      - "{{ element_web_root }}/config.json:/app/config.json"
+      - "{{ element_web_root }}/config.json:/app/config.json:ro"
     env:
       SERVER_NAME: "{{ matrix_domains.synapse }}"
       ELEMENT_WEB_PORT: "80"
