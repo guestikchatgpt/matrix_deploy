@@ -17,9 +17,6 @@
     - name: certbot_email
       prompt: "Email для Let's Encrypt"
       private: no
-    - name: matrix_admin_password
-      prompt: "Пароль администратора Matrix (пользователь admin)"
-      private: yes
 
   vars:
     matrix_admin_user: admin
