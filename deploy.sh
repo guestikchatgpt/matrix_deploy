@@ -46,15 +46,42 @@ detect_external_ipv4() {
 detect_ssh_port() {
   local port=''
 
-  if command -v sshd >/dev/null 2>&1; then
-    port="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}')"
-  fi
-
-  if [[ -z "$port" && -n "${SSH_CONNECTION:-}" ]]; then
+  # Prefer the server port of the current remote session. This remains correct
+  # when sshd listens on multiple Port directives.
+  if [[ -n "${SSH_CONNECTION:-}" ]]; then
     port="$(awk '{print $4}' <<<"$SSH_CONNECTION")"
   fi
 
+  if [[ -z "$port" ]] && command -v sshd >/dev/null 2>&1; then
+    port="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')"
+  fi
+
   printf '%s' "${port:-22}"
+}
+
+is_dns_label() {
+  local label="$1"
+  [[ ${#label} -le 63 ]] &&
+    [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]]
+}
+
+is_dns_name() {
+  local name="$1"
+  local label
+  local labels=()
+
+  [[ -n "$name" && ${#name} -le 253 ]] || return 1
+  IFS='.' read -r -a labels <<<"$name"
+  (( ${#labels[@]} >= 2 )) || return 1
+
+  for label in "${labels[@]}"; do
+    is_dns_label "$label" || return 1
+  done
+}
+
+is_ipv4() {
+  local address="$1"
+  python3 -c 'import ipaddress,sys; a=ipaddress.ip_address(sys.argv[1]); raise SystemExit(0 if a.version == 4 else 1)' "$address" >/dev/null 2>&1
 }
 
 is_local_ipv4() {
@@ -86,6 +113,12 @@ RTC_PREFIX="$(prompt_default 'Префикс LiveKit/MatrixRTC' 'rtc')"
 TURN_PREFIX="$(prompt_default 'Префикс legacy TURN' 'turn')"
 CERTBOT_EMAIL="$(prompt_default "Email Let's Encrypt" 'admin@example.com')"
 
+is_dns_name "$BASE_DOMAIN" || fatal "некорректный базовый домен: $BASE_DOMAIN"
+for prefix in "$SYNAPSE_PREFIX" "$ELEMENT_PREFIX" "$ADMIN_PREFIX" "$CALL_PREFIX" "$RTC_PREFIX" "$TURN_PREFIX"; do
+  is_dns_label "$prefix" || fatal "некорректный DNS-префикс: $prefix"
+done
+[[ "$CERTBOT_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || fatal "некорректный email Let's Encrypt: $CERTBOT_EMAIL"
+
 if prompt_yes_no 'Включить федерацию Matrix?' 'y'; then
   FEDERATION=true
 else
@@ -104,9 +137,10 @@ else
   fi
 fi
 
-[[ "$MATRIX_EXTERNAL_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fatal "некорректный IPv4: $MATRIX_EXTERNAL_IP"
+is_ipv4 "$MATRIX_EXTERNAL_IP" || fatal "некорректный IPv4: $MATRIX_EXTERNAL_IP"
 
 SSH_PORT="$(detect_ssh_port)"
+[[ "$SSH_PORT" =~ ^[0-9]+$ ]] && (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || fatal "некорректный SSH port: $SSH_PORT"
 printf 'SSH port: %s\n' "$SSH_PORT"
 
 if is_local_ipv4 "$MATRIX_EXTERNAL_IP"; then
@@ -117,6 +151,7 @@ else
   COTURN_NETWORK_MODE='nat'
   DEFAULT_RELAY_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") print $(i+1)}')"
   COTURN_RELAY_IP="$(prompt_default 'Public IPv4 не назначен хосту. Локальный relay IP для Coturn' "$DEFAULT_RELAY_IP")"
+  is_ipv4 "$COTURN_RELAY_IP" || fatal "некорректный локальный relay IPv4: $COTURN_RELAY_IP"
   printf 'Сетевой режим TURN: NAT (%s -> %s)\n' "$COTURN_RELAY_IP" "$MATRIX_EXTERNAL_IP"
   printf 'Внешний NAT должен пробрасывать TURN/RTC порты на этот сервер.\n'
 fi
