@@ -53,7 +53,8 @@ The target remains a reusable installer for a clean Ubuntu 24.04 LTS host. Produ
 - Routine `site.yml` runs must converge configuration without silently upgrading images.
 - Keep upgrades as an explicit workflow with backup, compatibility checks, deployment, verification, and rollback information.
 - Pin Ansible collection versions after compatibility validation.
-- Ketesa currently documents the `latest` container channel as the supported drop-in path; treat it as an explicit exception until an appropriate immutable production tag/digest policy is selected.
+- Pin every application image to a published release tag; moving `latest` tags are not accepted in the release-candidate matrix.
+- Validate every pinned image in CI against the registry and require both linux/amd64 and linux/arm64 manifests.
 
 ## Nginx and ACME
 
@@ -134,7 +135,8 @@ Before considering a release candidate complete:
 ### Implemented in code
 
 - [x] Generic topology/subdomain model; no production domain/IP hard-coding in executable content.
-- [x] Pinned controller/collection versions and pinned service versions; Ketesa `latest` remains the single explicit exception.
+- [x] Pinned controller/collection versions and fully pinned application image release tags.
+- [x] CI registry validation for every application image, including linux/amd64 and linux/arm64 manifests.
 - [x] Interactive bootstrap/launcher with persisted topology, input validation and preflight.
 - [x] Direct-public/NAT distinction, exact local-IP checks and active SSH-session port detection.
 - [x] Explicit IPv6-disabled behavior with AAAA rejection.
