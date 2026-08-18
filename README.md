@@ -10,8 +10,9 @@
 Эти TURN-стеки независимы по архитектуре и не должны объединяться.
 
 > Статус: ветка hardening / подготовка релиз-кандидата. Уже работают статические
-> проверки, syntax CI и runtime CI для bootstrap/preflight. До слияния этой ветки
-> в `main` и до использования её как production-релиза всё ещё требуется полный
+> проверки, syntax CI и runtime CI для bootstrap/preflight, включая реальное
+> динамическое определение stable-версий upstream. До слияния этой ветки в `main`
+> и до использования её как production-релиза всё ещё требуется полный
 > интеграционный тест на чистом сервере с реальными DNS проекта и ACME.
 
 ## Что разворачивается
@@ -28,9 +29,47 @@
 - UFW;
 - базовая защита SSH через Fail2ban.
 
-Версии контейнеров и приложений зафиксированы в
-`ansible/inventory/group_vars/all/versions.yml`. Плавающие теги `latest` в
-матрице релиз-кандидата не допускаются.
+## Как выбираются версии приложений
+
+Версии приложений **не захардкожены в playbook** и не берутся через плавающий
+`:latest` во время запуска контейнеров.
+
+`ansible/inventory/group_vars/all/versions.yml` содержит только политику
+разрешения версий: upstream GitHub-репозитории, Docker image repositories,
+правила преобразования release tag -> image tag и разрешённый major PostgreSQL.
+
+Во время первого preflight Matrix Deploy:
+
+1. получает latest stable release каждого приложения через GitHub Releases;
+2. исключает draft/prerelease через семантику stable release;
+3. для Docker Hub-образов дополнительно проверяет соответствующий tag через
+   Docker Hub API;
+4. для всех Docker Hub/GHCR-образов проверяет реальную доступность выбранного
+   image/tag и архитектуры хоста через `skopeo`;
+5. для PostgreSQL выбирает последний опубликованный stable patch в разрешённом
+   major, используя metadata Docker Official Images;
+6. атомарно сохраняет точный набор выбранных версий в
+   `/etc/matrix-deploy/versions.yml` с режимом `0600`;
+7. после установки Docker заранее скачивает именно эти exact image refs, а затем
+   запускает контейнеры с теми же refs.
+
+Таким образом, новая установка получает актуальные stable-версии на момент
+развёртывания, но весь конкретный deploy остаётся воспроизводимым.
+
+Обычный `converge.sh` снова проверяет upstream и сообщает о доступных обновлениях,
+но **не переписывает version lock и не обновляет контейнеры самовольно**.
+Явное обновление выполняется через `upgrade.sh`: сначала backup, затем refresh
+lock-файла, затем converge с новым exact-набором.
+
+PostgreSQL является специальным случаем: его major задаётся политикой
+`postgresql_major` и автоматически не повышается. Resolver выбирает только
+последний stable release внутри разрешённого major. Смена major PostgreSQL —
+отдельная миграционная операция.
+
+Если GitHub/Docker registry временно недоступны при обычном converge, существующий
+lock сохраняется. При первом deploy или явном `upgrade.sh` невозможность
+разрешить/проверить версии является ошибкой: развёртывание не должно начинаться с
+непроверенным набором образов.
 
 ## Первое развёртывание
 
@@ -47,7 +86,7 @@ sudo ./bootstrap.sh
 `bootstrap.sh`:
 
 1. требует Ubuntu 24.04 LTS (`noble`) и запуск от root;
-2. устанавливает небольшой набор зависимостей контроллера;
+2. устанавливает зависимости контроллера, включая `skopeo` для проверки registry;
 3. создаёт `.venv`;
 4. устанавливает зафиксированные версии `ansible-core` и коллекций;
 5. запускает интерактивный launcher `deploy.sh`.
@@ -63,6 +102,7 @@ Launcher запрашивает:
 
 Он определяет порт активной SSH-сессии, проверяет ввод оператора, сохраняет
 несекретную топологию в `/etc/matrix-deploy/deployment.yml`, запускает preflight,
+разрешает и фиксирует текущие stable-версии в `/etc/matrix-deploy/versions.yml`,
 выводит план развёртывания и требует подтверждения перед запуском основного
 playbook.
 
@@ -86,7 +126,11 @@ sudo ./bootstrap.sh --prepare-only
 - DNS A-записи всех сервисных имён Matrix без лишних дополнительных A-адресов;
 - неожиданные AAAA-записи при отключённом IPv6;
 - конфликты портов на чистом хосте;
-- доступность apt-репозиториев.
+- доступность apt-репозиториев;
+- актуальные stable releases приложений;
+- существование соответствующих Docker image tags;
+- доступность выбранного image для архитектуры текущего хоста;
+- целостность runtime version lock.
 
 Проверка DNS A/AAAA выполняет прямые DNS-запросы, а не использует результат
 NSS-подобного разрешения имён. Поэтому IPv4-mapped IPv6-адреса не могут быть
@@ -104,9 +148,19 @@ AAAA-записей при `matrix_ipv6_enabled=false` считается оши
 sudo ./converge.sh
 ```
 
-Используется `/etc/matrix-deploy/deployment.yml`. Если существующая учётная запись
-администратора уже создана, пароль администратора Matrix повторно не
-запрашивается.
+Используются:
+
+```text
+/etc/matrix-deploy/deployment.yml
+/etc/matrix-deploy/versions.yml
+```
+
+Preflight проверяет, появились ли новые stable releases upstream, но version lock
+при обычном converge не меняет. Поэтому повторное применение конфигурации не
+является скрытым обновлением приложений.
+
+Если существующая учётная запись администратора уже создана, пароль
+администратора Matrix повторно не запрашивается.
 
 Если первое развёртывание прервалось после сохранения топологии, но до создания
 начальной учётной записи `@admin`, можно продолжить без повторного ввода
@@ -120,6 +174,9 @@ sudo ./converge.sh --admin-password
 файле в `/run/matrix-deploy/` на время запуска Ansible и удаляется shell trap.
 В `/etc/matrix-deploy` он не сохраняется.
 
+Флаг `--refresh-versions` существует для явного обновления lock-файла и обычно
+вызывается через `upgrade.sh`, а не вручную.
+
 ### Ansible check/diff
 
 ```bash
@@ -127,15 +184,17 @@ sudo ./check.sh
 ```
 
 `check.sh` намеренно работает только с уже развёрнутой управляемой установкой.
-Перед запуском Ansible он требует наличия всех постоянных сгенерированных
-секретов и обеих полных пар certificate/key. Если управляемое состояние неполное,
-скрипт завершает работу и требует реального converge/recovery вместо того, чтобы
-позволять check mode побочно создавать отсутствующий секрет или сертификат.
+Перед запуском Ansible он требует существующий `/etc/matrix-deploy/versions.yml`,
+все постоянные сгенерированные секреты и обе полные пары certificate/key. Если
+управляемое состояние неполное, скрипт требует реального converge/recovery.
 
-Затем запускается preflight, после него — `site.yml --check --diff`. Runtime-
-reconciliation и health-check'и, которые невозможно осмысленно симулировать,
-в check mode пропускаются. При этом состояние SAN сертификатов всё равно
-считывается, а playbook сообщает, потребовалась бы reconciliation каждой
+Затем запускается preflight, после него — `site.yml --check --diff`. Preflight
+может проверить наличие более новых upstream releases, но `check.sh` никогда не
+создаёт и не обновляет version lock.
+
+Runtime reconciliation и health-check'и, которые невозможно осмысленно
+симулировать, в check mode пропускаются. При этом состояние SAN сертификатов всё
+равно считывается, а playbook сообщает, потребовалась бы reconciliation каждой
 линейки или нет.
 
 Check mode — инструмент проверки desired state, а не замена реального converge и
@@ -193,10 +252,11 @@ sudo ./backup.sh --include-media
 
 Резервные копии сохраняются в `/var/backups/matrix-deploy/<timestamp>/` с режимом
 `0700`. В них входят логический dump PostgreSQL в custom format, управляемые
-секреты и конфигурация, signing key/appservice state Synapse, состояние
-сертификатов, инвентари Docker/UFW и manifest. Для файлов backup принудительно
-устанавливается режим `0600` только для root; это особенно важно для
-`docker-inspect.json`, который может содержать секреты из environment контейнеров.
+секреты и конфигурация, `/etc/matrix-deploy` вместе с deployment/version lock,
+signing key/appservice state Synapse, состояние сертификатов, инвентари
+Docker/UFW и manifest. Для файлов backup принудительно устанавливается режим
+`0600` только для root; это особенно важно для `docker-inspect.json`, который
+может содержать секреты из environment контейнеров.
 
 Сырая директория данных PostgreSQL намеренно не архивируется: PostgreSQL
 резервируется логически через `pg_dump`.
@@ -204,17 +264,23 @@ sudo ./backup.sh --include-media
 Обычный backup **не включает** потенциально большой media store, если явно не
 указан `--include-media`.
 
-### Обновление до версий, зафиксированных в текущем checkout
+### Явное обновление до актуальных stable-версий upstream
 
 ```bash
 sudo ./upgrade.sh
 ```
 
-`upgrade.sh` требует подтверждения, сначала создаёт backup, затем выполняет
-обычный converge. Штатный `converge.sh` не использует `pull: true`, поэтому он не
-является неявной операцией «обновить всё до latest». Для PostgreSQL дополнительно
-есть guard по major version и data directory, поэтому изменение настроенной
-major-версии не сможет молча запустить несовместимый образ базы данных.
+`upgrade.sh` требует подтверждения и сначала создаёт backup. Затем preflight
+заново опрашивает upstream, проверяет registry и **атомарно заменяет**
+`/etc/matrix-deploy/versions.yml` новым exact-набором. Docker-role заранее
+скачивает выбранные image refs, после чего выполняется обычный converge.
+
+Это единственный штатный workflow, который намеренно двигает application
+versions вперёд. Обычный `converge.sh` lock не изменяет.
+
+Major PostgreSQL при этом автоматически не меняется. Для него обновляется только
+stable patch в пределах `postgresql_major`; guard по major version/data directory
+не позволяет молча запустить несовместимую базу.
 
 ### Удаление развёртывания
 
@@ -321,6 +387,7 @@ Matrix/Nginx-специфичные фильтры не включаются, п
 
 ```text
 /etc/matrix-deploy/deployment.yml       сохранённая топология и выбор оператора
+/etc/matrix-deploy/versions.yml         exact version lock, выбранный preflight
 /opt/matrix/.secrets/                   сгенерированные исходные секреты (только root)
 /opt/matrix/                            управляемое состояние приложений
 /var/www/matrix/                        Matrix well-known + ACME webroot
@@ -338,28 +405,37 @@ Docker socket фактически эквивалентен root и прилож
 
 GitHub Actions выполняет:
 
-- проверки YAML и статических invariants, включая запрет плавающих ссылок на
-  образы `:latest` и известных deprecated-паттернов Ansible;
-- проверку manifest в registry для каждого зафиксированного application image с
-  обязательной поддержкой `linux/amd64` и `linux/arm64`;
-- проверку синтаксиса shell;
-- реальный запуск `bootstrap.sh --prepare-only` на Ubuntu 24.04 с зафиксированными
-  версиями контроллера и коллекций;
-- реальный запуск `preflight.yml` в NAT-режиме на чистом runner Ubuntu 24.04 с
-  настоящими DNS A/AAAA-запросами и проверками ресурсов, портов, routing и apt;
+- проверки YAML и статических invariants, включая запрет возвращения hardcoded
+  top-level `*_image` pins в version policy, плавающих `:latest` и известных
+  deprecated-паттернов Ansible;
+- реальный запуск `bootstrap.sh --prepare-only` на Ubuntu 24.04;
+- реальный runtime preflight с запросами к GitHub Releases, Docker Official
+  Images/Docker Hub и registry validation через `skopeo`;
+- проверку, что повторный обычный preflight заново проверяет upstream, но не
+  изменяет SHA существующего `/etc/matrix-deploy/versions.yml`;
+- проверку manifest всех **динамически выбранных** image refs с обязательной
+  поддержкой `linux/amd64` и `linux/arm64`;
+- проверку синтаксиса shell и Python resolver;
+- настоящий NAT-mode preflight на runner Ubuntu 24.04 с DNS A/AAAA-запросами и
+  проверками ресурсов, портов, routing и apt;
 - разбор inventory;
 - `ansible-playbook --syntax-check` для playbook развёртывания, preflight,
   verification, backup и destroy;
-- реальный рендер Jinja verifier с включённой и отключённой федерацией, после
-  чего для обоих отрендеренных скриптов выполняется `bash -n`.
+- реальный рендер Jinja verifier с включённой и отключённой федерацией и
+  `bash -n` для обоих вариантов.
 
-В конфигурации Ansible отключена deprecated-инъекция facts в top-level
-переменные; роли используют `ansible_facts[...]`. Управление сторонними
-apt-репозиториями выполнено в формате deb822.
+Версии `ansible-core` и collections по-прежнему фиксируются в репозитории, потому
+что это runtime самого установщика, а не обновляемый Matrix application stack.
+Конфигурация Ansible отключает deprecated top-level fact injection; роли
+используют `ansible_facts[...]`. Сторонние apt-репозитории управляются через
+deb822.
 
-Эти CI-gate необходимы, но недостаточны. Перед слиянием релиз-кандидата нужно
-пройти оставшиеся интеграционные этапы из `ROADMAP.md`: полное развёртывание на
-чистой Ubuntu с реальными DNS/ACME, второй converge/idempotence, `check.sh`,
-проверку сохранения состояния после reboot, Certbot dry-run, федерацию,
-классический TURN и MatrixRTC-звонки, а также rehearsal backup/destroy/restore до
-включения автоматического восстановления.
+Эти CI-gate необходимы, но недостаточны. Динамический resolver подтверждает
+существование и стабильность отдельных upstream releases, но не заменяет
+интеграционную проверку совместимости всего набора как единого стека.
+
+Перед слиянием релиз-кандидата нужно пройти оставшиеся этапы из `ROADMAP.md`:
+полное развёртывание на чистой Ubuntu с реальными DNS/ACME, второй
+converge/idempotence, `check.sh`, reboot, Certbot dry-run, федерацию, классический
+TURN и MatrixRTC-звонки, а также rehearsal backup/destroy/restore до включения
+автоматического восстановления.
