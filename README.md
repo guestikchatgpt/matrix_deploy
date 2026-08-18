@@ -118,11 +118,16 @@ trap. It is not persisted in `/etc/matrix-deploy`.
 sudo ./check.sh
 ```
 
-`check.sh` is for an existing or partially deployed installation. It runs
-preflight followed by `site.yml --check --diff`. Runtime reconciliation and
-health probes that cannot be meaningfully simulated are skipped in check mode;
-certificate SAN state is still read and the playbook reports whether each
-lineage would require reconciliation.
+`check.sh` is deliberately limited to an already deployed managed installation.
+Before Ansible starts it requires all persistent generated secrets and both
+certificate/key lineages to exist. If managed state is incomplete, it exits and
+asks for a real converge/recovery instead of allowing check mode to generate a
+missing secret or certificate as a side effect.
+
+It then runs preflight followed by `site.yml --check --diff`. Runtime
+reconciliation and health probes that cannot be meaningfully simulated are
+skipped in check mode; certificate SAN state is still read and the playbook
+reports whether each lineage would require reconciliation.
 
 Check mode is a desired-state review tool, not a substitute for a real converge
 and the final verifier.
