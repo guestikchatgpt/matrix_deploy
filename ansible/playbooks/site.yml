@@ -20,6 +20,14 @@
     matrix_admin_user: admin
 
   pre_tasks:
+    - name: Prepare local persistent secret directory before controller lookups
+      ansible.builtin.file:
+        path: "{{ matrix_root_dir }}/.secrets"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
     - name: Определить внешний IP через ipify
       uri:
         url: https://api.ipify.org
