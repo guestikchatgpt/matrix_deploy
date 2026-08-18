@@ -31,7 +31,7 @@ jobs:
       - name: Parse YAML and enforce deployment invariants
         run: python tools/static_checks.py
 
-      - name: Validate pinned container image references
+      - name: Validate pinned container image references and architectures
         shell: bash
         run: |
           set -euo pipefail
@@ -53,7 +53,26 @@ jobs:
 
           while IFS= read -r image; do
             printf 'Checking image manifest: %s\n' "$image"
-            docker manifest inspect "$image" >/dev/null
+            manifest="/tmp/matrix-image-manifest.json"
+            docker manifest inspect "$image" > "$manifest"
+            python - "$image" "$manifest" <<'PY'
+          import json
+          import sys
+
+          image = sys.argv[1]
+          with open(sys.argv[2], encoding='utf-8') as fh:
+              manifest = json.load(fh)
+
+          platforms = {
+              (entry.get('platform', {}).get('os'), entry.get('platform', {}).get('architecture'))
+              for entry in manifest.get('manifests', [])
+          }
+          required = {('linux', 'amd64'), ('linux', 'arm64')}
+          missing = sorted(required - platforms)
+          if missing:
+              raise SystemExit(f'{image} is missing required platforms: {missing}; found={sorted(platforms)}')
+          print(f'{image}: amd64+arm64 OK')
+          PY
           done < /tmp/matrix-deploy-images.txt
 
       - name: Validate shell syntax
