@@ -70,13 +70,29 @@
 - name: Check existing Matrix SAN certificate
   ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem"}
   register: nginx_web_cert
+- name: Check existing Matrix SAN private key
+  ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem"}
+  register: nginx_web_key
 - name: Check existing TURN certificate
   ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem"}
   register: nginx_turn_cert
+- name: Check existing TURN private key
+  ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/privkey.pem"}
+  register: nginx_turn_key
+
+- name: Determine certificate lineage completeness
+  ansible.builtin.set_fact:
+    nginx_web_cert_complete: "{{ nginx_web_cert.stat.exists and nginx_web_key.stat.exists }}"
+    nginx_turn_cert_complete: "{{ nginx_turn_cert.stat.exists and nginx_turn_key.stat.exists }}"
+
+- name: Remove production Nginx config if the main TLS lineage is incomplete
+  ansible.builtin.file: {path: /etc/nginx/conf.d/10-matrix.conf, state: absent}
+  when: not nginx_web_cert_complete | bool
+  notify: Reload Nginx
 
 - name: Install HTTP bootstrap configuration when certificates are incomplete
   ansible.builtin.template: {src: matrix-bootstrap.conf.j2, dest: /etc/nginx/conf.d/00-matrix-bootstrap.conf, owner: root, group: root, mode: '0644'}
-  when: not (nginx_web_cert.stat.exists and nginx_turn_cert.stat.exists)
+  when: not (nginx_web_cert_complete | bool and nginx_turn_cert_complete | bool)
   notify: Reload Nginx
 
 - name: Ensure Nginx is enabled and started
@@ -89,12 +105,12 @@
 
 - name: Install ACME-safe production configuration before certificate reconciliation
   ansible.builtin.template: {src: matrix.conf.j2, dest: /etc/nginx/conf.d/10-matrix.conf, owner: root, group: root, mode: '0644'}
-  when: nginx_web_cert.stat.exists and nginx_turn_cert.stat.exists
+  when: nginx_web_cert_complete | bool and nginx_turn_cert_complete | bool
   notify: Reload Nginx
 - name: Validate pre-reconciliation Nginx configuration
   ansible.builtin.command: nginx -t
   changed_when: false
-  when: nginx_web_cert.stat.exists and nginx_turn_cert.stat.exists
+  when: nginx_web_cert_complete | bool and nginx_turn_cert_complete | bool
 - name: Apply ACME-safe Nginx routing before certificate reconciliation
   ansible.builtin.meta: flush_handlers
 
@@ -118,14 +134,14 @@
   register: nginx_web_cert_sans
   changed_when: false
   failed_when: false
-  when: nginx_web_cert.stat.exists
+  when: nginx_web_cert_complete | bool
 - name: Read TURN certificate SANs
   ansible.builtin.command: >-
     openssl x509 -in /etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem -noout -ext subjectAltName
   register: nginx_turn_cert_sans
   changed_when: false
   failed_when: false
-  when: nginx_turn_cert.stat.exists
+  when: nginx_turn_cert_complete | bool
 
 - name: Determine certificate reconciliation requirements
   ansible.builtin.set_fact:
@@ -138,7 +154,7 @@
     --non-interactive --agree-tos --email {{ certbot_email | quote }}
     --cert-name {{ matrix_domains.synapse | quote }} --force-renewal
     {% for domain in matrix_certbot_web_domains %}-d {{ domain | quote }} {% endfor %}
-  when: (not nginx_web_cert.stat.exists) or ((nginx_web_cert_actual_domains | sort) != (matrix_certbot_web_domains | sort))
+  when: (not nginx_web_cert_complete | bool) or ((nginx_web_cert_actual_domains | sort) != (matrix_certbot_web_domains | sort))
   register: certbot_web
   changed_when: certbot_web.rc == 0
 
@@ -147,18 +163,29 @@
     certbot certonly --webroot --webroot-path {{ nginx_sites_root | quote }}
     --non-interactive --agree-tos --email {{ certbot_email | quote }}
     --cert-name {{ matrix_domains.turn | quote }} --force-renewal -d {{ matrix_domains.turn | quote }}
-  when: (not nginx_turn_cert.stat.exists) or ((nginx_turn_cert_actual_domains | sort) != ([matrix_domains.turn] | sort))
+  when: (not nginx_turn_cert_complete | bool) or ((nginx_turn_cert_actual_domains | sort) != ([matrix_domains.turn] | sort))
   register: certbot_turn
   changed_when: certbot_turn.rc == 0
 
 - name: Verify Matrix certificate exists after reconciliation
   ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem"}
   register: nginx_web_cert_after
+- name: Verify Matrix private key exists after reconciliation
+  ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem"}
+  register: nginx_web_key_after
 - name: Verify TURN certificate exists after reconciliation
   ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem"}
   register: nginx_turn_cert_after
-- name: Require both certificate lineages
-  ansible.builtin.assert: {that: [nginx_web_cert_after.stat.exists, nginx_turn_cert_after.stat.exists]}
+- name: Verify TURN private key exists after reconciliation
+  ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/privkey.pem"}
+  register: nginx_turn_key_after
+- name: Require both complete certificate lineages
+  ansible.builtin.assert:
+    that:
+      - nginx_web_cert_after.stat.exists
+      - nginx_web_key_after.stat.exists
+      - nginx_turn_cert_after.stat.exists
+      - nginx_turn_key_after.stat.exists
 
 - name: Check Matrix certificate validity
   ansible.builtin.command: "openssl x509 -in /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem -checkend 0 -noout"
