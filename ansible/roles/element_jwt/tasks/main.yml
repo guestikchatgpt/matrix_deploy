@@ -1,12 +1,4 @@
 ---
-- name: Create Element JWT directory
-  ansible.builtin.file:
-    path: "{{ element_jwt_root }}"
-    state: directory
-    owner: "{{ matrix_system_user }}"
-    group: "{{ matrix_system_group }}"
-    mode: '0750'
-
 - name: Run MatrixRTC authorization service
   community.docker.docker_container:
     name: element-jwt
