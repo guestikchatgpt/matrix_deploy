@@ -7,247 +7,133 @@ upstream synapse_backend {
     server 127.0.0.1:8008;
     keepalive 32;
 }
-
-upstream element_backend {
-    server 127.0.0.1:{{ element_web_host_port }};
-}
-
-upstream synad_backend {
-    server 127.0.0.1:{{ synad_host_port }};
-}
-
-upstream element_call_backend {
-    server 127.0.0.1:{{ element_call_host_port }};
-}
-
-upstream livekit_sfu_backend {
-    server 127.0.0.1:{{ livekit_ws_port }};
-}
-
-upstream livekit_api_backend {
-    server 127.0.0.1:{{ livekit_http_port }};
-}
-
-upstream element_jwt_backend {
-    server 127.0.0.1:{{ element_jwt_port }};
-}
+upstream element_backend { server 127.0.0.1:{{ element_web_host_port }}; }
+upstream synad_backend { server 127.0.0.1:{{ synad_host_port }}; }
+upstream element_call_backend { server 127.0.0.1:{{ element_call_host_port }}; }
+upstream livekit_sfu_backend { server 127.0.0.1:{{ livekit_http_port }}; }
+upstream livekit_api_backend { server 127.0.0.1:{{ livekit_http_port }}; }
+upstream element_jwt_backend { server 127.0.0.1:{{ element_jwt_host_port }}; }
 
 server {
     listen 80;
     server_name {{ matrix_base_domain }};
-
-    location /.well-known/matrix/client {
-        alias {{ nginx_well_known_dir }}/client;
-        default_type application/json;
-        add_header Access-Control-Allow-Origin *;
-    }
-
-    location /.well-known/matrix/server {
-        alias {{ nginx_well_known_dir }}/server;
-        default_type application/json;
-        add_header Access-Control-Allow-Origin *;
-    }
-
-    location /.well-known/acme-challenge/ {
-        root {{ nginx_sites_root }};
-    }
-
-    location / {
-        return 301 https://{{ matrix_domains.element }}$request_uri;
-    }
+    location ^~ /.well-known/acme-challenge/ { root {{ nginx_sites_root }}; default_type text/plain; try_files $uri =404; }
+    location /.well-known/matrix/client { alias {{ nginx_well_known_dir }}/client; default_type application/json; add_header Access-Control-Allow-Origin *; add_header Cache-Control "public, no-cache"; }
+    location /.well-known/matrix/server { alias {{ nginx_well_known_dir }}/server; default_type application/json; add_header Access-Control-Allow-Origin *; add_header Cache-Control "public, no-cache"; }
+    location / { return 301 https://{{ matrix_domains.element }}$request_uri; }
 }
 
 server {
     listen 80;
     server_name {{ matrix_domains.synapse }};
-    return 301 https://$host$request_uri;
+    location ^~ /.well-known/acme-challenge/ { root {{ nginx_sites_root }}; default_type text/plain; try_files $uri =404; }
+    location / { return 301 https://$host$request_uri; }
 }
 
 server {
     listen 443 ssl;
+{% if synapse_enable_federation | bool %}
     listen 8448 ssl;
+{% endif %}
     http2 on;
     server_name {{ matrix_domains.synapse }};
-
     ssl_certificate /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem;
     ssl_session_cache shared:SSL:10m;
     ssl_protocols TLSv1.2 TLSv1.3;
-
     client_max_body_size 100M;
-	
-    location /.well-known/matrix/client {
-        alias {{ nginx_well_known_dir }}/client;
-        default_type application/json;
-        add_header Access-Control-Allow-Origin *;
-		add_header Cache-Control "public, no-cache";
-    }
 
-    location /.well-known/matrix/server {
-        alias {{ nginx_well_known_dir }}/server;
-        default_type application/json;
-        add_header Access-Control-Allow-Origin *;
-		add_header Cache-Control "public, no-cache";
-    }
+    location /.well-known/matrix/client { alias {{ nginx_well_known_dir }}/client; default_type application/json; add_header Access-Control-Allow-Origin *; add_header Cache-Control "public, no-cache"; }
+    location /.well-known/matrix/server { alias {{ nginx_well_known_dir }}/server; default_type application/json; add_header Access-Control-Allow-Origin *; add_header Cache-Control "public, no-cache"; }
 
     location /_matrix {
         proxy_pass http://synapse_backend;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Host $host;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_read_timeout 600s;
-    }
-
-    location /_synapse {
-        proxy_pass http://synapse_backend;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Host $host;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_read_timeout 600s;
-    }
-}
-
-server {
-    listen 80;
-    server_name {{ matrix_domains.element }};
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name {{ matrix_domains.element }};
-
-    ssl_certificate /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem;
-
-    location / {
-        proxy_pass http://element_backend;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-    }
-}
-
-server {
-    listen 80;
-    server_name {{ matrix_domains.admin }};
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name {{ matrix_domains.admin }};
-
-    ssl_certificate /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem;
-
-    location / {
-        proxy_pass http://synad_backend;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-    }
-}
-
-server {
-    listen 80;
-    server_name {{ matrix_domains.element_call }};
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name {{ matrix_domains.element_call }};
-
-    ssl_certificate /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem;
-
-    location / {
-        proxy_pass http://element_call_backend;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-    }
-}
-
-server {
-    listen 80;
-    server_name {{ matrix_domains.livekit }};
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name {{ matrix_domains.livekit }};
-
-    ssl_certificate /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem;
-
-    location ^~ /livekit/jwt/ {
-        proxy_pass http://element_jwt_backend/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host $host;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 600s;
     }
 
+    location ^~ /_synapse/client/ {
+        proxy_pass http://synapse_backend;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host $host;
+    }
+    location ^~ /_synapse/admin/ {
+        proxy_pass http://synapse_backend;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host $host;
+    }
+    location ^~ /_synapse/ { return 404; }
+}
+
+server {
+    listen 80;
+    server_name {{ matrix_domains.element }};
+    location ^~ /.well-known/acme-challenge/ { root {{ nginx_sites_root }}; default_type text/plain; try_files $uri =404; }
+    location / { return 301 https://$host$request_uri; }
+}
+server {
+    listen 443 ssl; http2 on; server_name {{ matrix_domains.element }};
+    ssl_certificate /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem;
+    location / { proxy_pass http://element_backend; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto $scheme; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; }
+}
+
+server {
+    listen 80; server_name {{ matrix_domains.admin }};
+    location ^~ /.well-known/acme-challenge/ { root {{ nginx_sites_root }}; default_type text/plain; try_files $uri =404; }
+    location / { return 301 https://$host$request_uri; }
+}
+server {
+    listen 443 ssl; http2 on; server_name {{ matrix_domains.admin }};
+    ssl_certificate /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem;
+    location / { proxy_pass http://synad_backend; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-Proto $scheme; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; }
+}
+
+server {
+    listen 80; server_name {{ matrix_domains.element_call }};
+    location ^~ /.well-known/acme-challenge/ { root {{ nginx_sites_root }}; default_type text/plain; try_files $uri =404; }
+    location / { return 301 https://$host$request_uri; }
+}
+server {
+    listen 443 ssl; http2 on; server_name {{ matrix_domains.element_call }};
+    ssl_certificate /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem;
+    location / { proxy_pass http://element_call_backend; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-Proto $scheme; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; }
+}
+
+server {
+    listen 80; server_name {{ matrix_domains.livekit }};
+    location ^~ /.well-known/acme-challenge/ { root {{ nginx_sites_root }}; default_type text/plain; try_files $uri =404; }
+    location / { return 301 https://$host$request_uri; }
+}
+server {
+    listen 443 ssl; http2 on; server_name {{ matrix_domains.livekit }};
+    ssl_certificate /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem;
+    location ^~ /livekit/jwt/ { proxy_pass http://element_jwt_backend/; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme; }
     location ^~ /livekit/sfu/ {
         proxy_pass http://livekit_sfu_backend/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Accept-Encoding gzip;
-        proxy_send_timeout 120;
-        proxy_read_timeout 120;
-        proxy_buffering off;
+        proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection $connection_upgrade; proxy_set_header Accept-Encoding gzip;
+        proxy_send_timeout 120; proxy_read_timeout 120; proxy_buffering off;
     }
-
     location / {
         proxy_pass http://livekit_api_backend;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_http_version 1.1;
-        proxy_send_timeout 120;
-        proxy_read_timeout 120;
-        proxy_buffering off;
+        proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1; proxy_send_timeout 120; proxy_read_timeout 120; proxy_buffering off;
     }
 }
 
 server {
-    listen 80;
-    server_name {{ matrix_domains.turn }};
-
-    location /.well-known/acme-challenge/ {
-        root {{ nginx_sites_root }};
-    }
-
-    location / {
-        return 200 "TURN alive";
-        add_header Content-Type text/plain;
-    }
+    listen 80; server_name {{ matrix_domains.turn }};
+    location ^~ /.well-known/acme-challenge/ { root {{ nginx_sites_root }}; default_type text/plain; try_files $uri =404; }
+    location / { return 200 "TURN alive\n"; add_header Content-Type text/plain; }
 }

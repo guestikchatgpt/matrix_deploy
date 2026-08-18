@@ -1,4 +1,7 @@
-
+{% if synapse_enable_federation | bool %}
 {
   "m.server": "{{ matrix_domains.synapse }}:443"
 }
+{% else %}
+{}
+{% endif %}

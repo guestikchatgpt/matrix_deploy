@@ -22,7 +22,7 @@
 - name: Установить Python SDK Docker из официального PyPI
   ansible.builtin.apt:
     name: python3-docker
-    state: latest
+    state: present
 
 - name: Создать системную группу Matrix
   group:
@@ -52,3 +52,13 @@
     owner: "{{ matrix_system_user }}"
     group: "{{ matrix_system_group }}"
     mode: "0700"
+
+- name: Map host architecture to Debian repository architecture
+  ansible.builtin.set_fact:
+    matrix_deb_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] | default('') }}"
+
+- name: Require a supported CPU architecture
+  ansible.builtin.assert:
+    that:
+      - matrix_deb_arch | length > 0
+    fail_msg: "Unsupported architecture for Matrix Deploy: {{ ansible_architecture }}"

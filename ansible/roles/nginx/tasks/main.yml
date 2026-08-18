@@ -1,200 +1,188 @@
-- name: Проверить поддержку репозитория Nginx для текущего дистрибутива
+---
+- name: Check Nginx repository support
   ansible.builtin.assert:
-    that:
-      - ansible_distribution == "Ubuntu"
-      - ansible_distribution_release in ["noble", "jammy", "focal"]
-    fail_msg: "Официальный репозиторий nginx.org не поддерживает {{ ansible_distribution }} {{ ansible_distribution_release }}. Проверьте https://nginx.org/en/linux_packages.html и обновите конфигурацию."
+    that: ["ansible_distribution == 'Ubuntu'", "ansible_distribution_release == 'noble'"]
+    fail_msg: 'Matrix Deploy currently targets Ubuntu 24.04 LTS (noble).'
 
-- name: Получить ключ подписи Nginx
+- name: Create apt keyring directory
+  ansible.builtin.file: {path: /usr/share/keyrings, state: directory, mode: '0755'}
+
+- name: Download Nginx signing key
   ansible.builtin.get_url:
     url: https://nginx.org/keys/nginx_signing.key
     dest: /usr/share/keyrings/nginx-archive-keyring.gpg.asc
-    mode: "0644"
+    mode: '0644'
+  register: nginx_signing_key
 
-- name: Импортировать ключ Nginx в формате gpg
+- name: Check existing dearmored Nginx keyring
+  ansible.builtin.stat: {path: /usr/share/keyrings/nginx-archive-keyring.gpg}
+  register: nginx_keyring_stat
+
+- name: Refresh dearmored Nginx signing key when source changes
   ansible.builtin.command:
-    cmd: gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg /usr/share/keyrings/nginx-archive-keyring.gpg.asc
-    creates: /usr/share/keyrings/nginx-archive-keyring.gpg
+    argv: [gpg, --batch, --yes, --dearmor, --output, /usr/share/keyrings/nginx-archive-keyring.gpg, /usr/share/keyrings/nginx-archive-keyring.gpg.asc]
+  when: nginx_signing_key.changed or not nginx_keyring_stat.stat.exists
+  changed_when: true
 
-- name: Добавить репозиторий Nginx mainline
+- name: Check dearmored Nginx keyring
+  ansible.builtin.stat: {path: /usr/share/keyrings/nginx-archive-keyring.gpg}
+  register: nginx_keyring_after
+
+- name: Require Nginx keyring
+  ansible.builtin.assert: {that: [nginx_keyring_after.stat.exists]}
+
+- name: Add Nginx mainline repository
   ansible.builtin.apt_repository:
-    repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/mainline/ubuntu {{ ansible_distribution_release }} nginx"
+    repo: >-
+      deb [arch={{ matrix_deb_arch }} signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg]
+      https://nginx.org/packages/mainline/ubuntu {{ ansible_distribution_release }} nginx
     filename: nginx-mainline
     state: present
 
-- name: Установить Nginx и Certbot
+- name: Install Nginx and Certbot
   ansible.builtin.apt:
-    name:
-      - nginx
-      - certbot
+    name: [nginx, certbot]
     state: present
     update_cache: true
 
-- name: Удалить дефолтный конфиг Nginx
-  ansible.builtin.file:
-    path: /etc/nginx/conf.d/default.conf
-    state: absent
+- name: Remove default Nginx configuration
+  ansible.builtin.file: {path: /etc/nginx/conf.d/default.conf, state: absent}
   notify: Reload Nginx
 
-- name: Создать директорию webroot
-  ansible.builtin.file:
-    path: "{{ nginx_sites_root }}"
-    state: directory
-    owner: www-data
-    group: www-data
-    mode: "0755"
-
-- name: Создать директории .well-known
+- name: Create Matrix webroot directories
   ansible.builtin.file:
     path: "{{ nginx_sites_root }}/{{ item }}"
     state: directory
     owner: www-data
     group: www-data
-    mode: "0755"
-  loop:
-    - ".well-known"
-    - ".well-known/matrix"
-    - ".well-known/acme-challenge"
+    mode: '0755'
+  loop: ['', .well-known, .well-known/matrix, .well-known/acme-challenge]
 
-- name: Разместить .well-known matrix/server
-  ansible.builtin.template:
-    src: well_known_server.json.j2
-    dest: "{{ nginx_sites_root }}/.well-known/matrix/server"
-    owner: www-data
-    group: www-data
-    mode: "0644"
+- name: Render Matrix well-known server delegation
+  ansible.builtin.template: {src: well_known_server.json.j2, dest: "{{ nginx_sites_root }}/.well-known/matrix/server", owner: www-data, group: www-data, mode: '0644'}
+- name: Render Matrix client discovery
+  ansible.builtin.template: {src: well_known_client.json.j2, dest: "{{ nginx_sites_root }}/.well-known/matrix/client", owner: www-data, group: www-data, mode: '0644'}
 
-- name: Разместить .well-known matrix/client
-  ansible.builtin.template:
-    src: well_known_client.json.j2
-    dest: "{{ nginx_sites_root }}/.well-known/matrix/client"
-    owner: www-data
-    group: www-data
-    mode: "0644"
+- name: Build Matrix SAN domain set
+  ansible.builtin.set_fact:
+    matrix_certbot_web_domains: ["{{ matrix_domains.synapse }}", "{{ matrix_domains.element }}", "{{ matrix_domains.admin }}", "{{ matrix_domains.element_call }}", "{{ matrix_domains.livekit }}"]
 
-- name: Проверить наличие веб-сертификата
-  ansible.builtin.stat:
-    path: "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem"
+- name: Check existing Matrix SAN certificate
+  ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem"}
   register: nginx_web_cert
-
-- name: Проверить наличие TURN сертификата
-  ansible.builtin.stat:
-    path: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem"
+- name: Check existing TURN certificate
+  ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem"}
   register: nginx_turn_cert
 
-- name: Установить bootstrap-конфигурацию Nginx для HTTP
-  ansible.builtin.template:
-    src: matrix-bootstrap.conf.j2
-    dest: /etc/nginx/conf.d/00-matrix-bootstrap.conf
-    owner: root
-    group: root
-    mode: "0644"
+- name: Install HTTP bootstrap configuration when certificates are incomplete
+  ansible.builtin.template: {src: matrix-bootstrap.conf.j2, dest: /etc/nginx/conf.d/00-matrix-bootstrap.conf, owner: root, group: root, mode: '0644'}
   when: not (nginx_web_cert.stat.exists and nginx_turn_cert.stat.exists)
   notify: Reload Nginx
 
-- name: Убедиться что Nginx запущен
-  ansible.builtin.service:
-    name: nginx
-    state: started
-    enabled: true
+- name: Ensure Nginx is enabled and started
+  ansible.builtin.service: {name: nginx, state: started, enabled: true}
+- name: Validate bootstrap Nginx configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
+- name: Apply bootstrap Nginx configuration before ACME
+  ansible.builtin.meta: flush_handlers
 
-- name: Сформировать список доменов для основного сертификата
+- name: Install ACME-safe production configuration before certificate reconciliation
+  ansible.builtin.template: {src: matrix.conf.j2, dest: /etc/nginx/conf.d/10-matrix.conf, owner: root, group: root, mode: '0644'}
+  when: nginx_web_cert.stat.exists and nginx_turn_cert.stat.exists
+  notify: Reload Nginx
+- name: Validate pre-reconciliation Nginx configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
+  when: nginx_web_cert.stat.exists and nginx_turn_cert.stat.exists
+- name: Apply ACME-safe Nginx routing before certificate reconciliation
+  ansible.builtin.meta: flush_handlers
+
+- name: Create pre-ACME challenge probe
+  ansible.builtin.copy: {dest: "{{ nginx_sites_root }}/.well-known/acme-challenge/matrix-preflight", content: "matrix-acme-ok\n", owner: www-data, group: www-data, mode: '0644'}
+- name: Verify HTTP-01 routing locally
+  ansible.builtin.uri:
+    url: http://127.0.0.1/.well-known/acme-challenge/matrix-preflight
+    headers: {Host: "{{ item }}"}
+    return_content: true
+    status_code: 200
+  loop: "{{ matrix_certbot_web_domains + [matrix_domains.turn] }}"
+  register: nginx_acme_probe
+  failed_when: nginx_acme_probe.content | default('') | trim != 'matrix-acme-ok'
+- name: Remove pre-ACME challenge probe
+  ansible.builtin.file: {path: "{{ nginx_sites_root }}/.well-known/acme-challenge/matrix-preflight", state: absent}
+
+- name: Read Matrix certificate SANs
+  ansible.builtin.command: >-
+    openssl x509 -in /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem -noout -ext subjectAltName
+  register: nginx_web_cert_sans
+  changed_when: false
+  failed_when: false
+  when: nginx_web_cert.stat.exists
+- name: Read TURN certificate SANs
+  ansible.builtin.command: >-
+    openssl x509 -in /etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem -noout -ext subjectAltName
+  register: nginx_turn_cert_sans
+  changed_when: false
+  failed_when: false
+  when: nginx_turn_cert.stat.exists
+
+- name: Determine certificate reconciliation requirements
   ansible.builtin.set_fact:
-    matrix_certbot_web_domains:
-      - "{{ matrix_domains.synapse }}"
-      - "{{ matrix_domains.element }}"
-      - "{{ matrix_domains.admin }}"
-      - "{{ matrix_domains.element_call }}"
-      - "{{ matrix_domains.livekit }}"
+    nginx_web_cert_actual_domains: "{{ (nginx_web_cert_sans.stdout | default('') | regex_findall('DNS:([^,\\s]+)')) | sort }}"
+    nginx_turn_cert_actual_domains: "{{ (nginx_turn_cert_sans.stdout | default('') | regex_findall('DNS:([^,\\s]+)')) | sort }}"
 
-- name: Выпросить сертификат для веб-доменов
-  ansible.builtin.command: >
-    certbot certonly --webroot
-    --webroot-path {{ nginx_sites_root }}
-    --non-interactive --agree-tos
-    --email {{ certbot_email }}
-    {% for domain in matrix_certbot_web_domains -%}
-    -d {{ domain }}
-    {% endfor -%}
-  args:
-    creates: "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem"
-  when: not nginx_web_cert.stat.exists
+- name: Reconcile Matrix SAN certificate
+  ansible.builtin.command: >-
+    certbot certonly --webroot --webroot-path {{ nginx_sites_root | quote }}
+    --non-interactive --agree-tos --email {{ certbot_email | quote }}
+    --cert-name {{ matrix_domains.synapse | quote }} --force-renewal
+    {% for domain in matrix_certbot_web_domains %}-d {{ domain | quote }} {% endfor %}
+  when: (not nginx_web_cert.stat.exists) or ((nginx_web_cert_actual_domains | sort) != (matrix_certbot_web_domains | sort))
   register: certbot_web
   changed_when: certbot_web.rc == 0
 
-- name: Выпросить сертификат для TURN
-  ansible.builtin.command: >
-    certbot certonly --webroot
-    --webroot-path {{ nginx_sites_root }}
-    --non-interactive --agree-tos
-    --email {{ certbot_email }}
-    -d {{ matrix_domains.turn }}
-  args:
-    creates: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem"
-  when: not nginx_turn_cert.stat.exists
+- name: Reconcile TURN certificate
+  ansible.builtin.command: >-
+    certbot certonly --webroot --webroot-path {{ nginx_sites_root | quote }}
+    --non-interactive --agree-tos --email {{ certbot_email | quote }}
+    --cert-name {{ matrix_domains.turn | quote }} --force-renewal -d {{ matrix_domains.turn | quote }}
+  when: (not nginx_turn_cert.stat.exists) or ((nginx_turn_cert_actual_domains | sort) != ([matrix_domains.turn] | sort))
   register: certbot_turn
   changed_when: certbot_turn.rc == 0
 
-- name: Обновить статус веб-сертификата
-  ansible.builtin.stat:
-    path: "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem"
+- name: Verify Matrix certificate exists after reconciliation
+  ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem"}
   register: nginx_web_cert_after
-
-- name: Обновить статус TURN сертификата
-  ansible.builtin.stat:
-    path: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem"
+- name: Verify TURN certificate exists after reconciliation
+  ansible.builtin.stat: {path: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem"}
   register: nginx_turn_cert_after
+- name: Require both certificate lineages
+  ansible.builtin.assert: {that: [nginx_web_cert_after.stat.exists, nginx_turn_cert_after.stat.exists]}
 
-- name: Проверить сертификат Matrix через openssl
-  ansible.builtin.command: >
-    openssl x509 -in /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem -checkend 0 -noout
-  when: nginx_web_cert_after.stat.exists
+- name: Check Matrix certificate validity
+  ansible.builtin.command: "openssl x509 -in /etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem -checkend 0 -noout"
+  changed_when: false
+- name: Check TURN certificate validity
+  ansible.builtin.command: "openssl x509 -in /etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem -checkend 0 -noout"
   changed_when: false
 
-- name: Проверить сертификат TURN через openssl
-  ansible.builtin.command: >
-    openssl x509 -in /etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem -checkend 0 -noout
-  when: nginx_turn_cert_after.stat.exists
+- name: Install selective Certbot deploy hook
+  ansible.builtin.template: {src: renewal-hook.sh.j2, dest: /etc/letsencrypt/renewal-hooks/deploy/matrix-stack.sh, owner: root, group: root, mode: '0755'}
+- name: Validate Certbot deploy hook syntax
+  ansible.builtin.command: bash -n /etc/letsencrypt/renewal-hooks/deploy/matrix-stack.sh
   changed_when: false
+- name: Enable Certbot renewal timer
+  ansible.builtin.systemd: {name: certbot.timer, enabled: true, state: started}
 
-- name: Обеспечить каталог deploy hook Certbot
-  ansible.builtin.file:
-    path: /etc/letsencrypt/renewal-hooks/deploy
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Установить hook для перезагрузки сервисов после обновления сертификатов
-  ansible.builtin.template:
-    src: renewal-hook.sh.j2
-    dest: /etc/letsencrypt/renewal-hooks/deploy/matrix-stack.sh
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Развернуть боевую конфигурацию Nginx
-  ansible.builtin.template:
-    src: matrix.conf.j2
-    dest: /etc/nginx/conf.d/10-matrix.conf
-    owner: root
-    group: root
-    mode: "0644"
-  when: nginx_web_cert_after.stat.exists and nginx_turn_cert_after.stat.exists
+- name: Render production Nginx configuration
+  ansible.builtin.template: {src: matrix.conf.j2, dest: /etc/nginx/conf.d/10-matrix.conf, owner: root, group: root, mode: '0644'}
   notify: Reload Nginx
-
-- name: Удалить bootstrap-конфиг после получения сертификатов
-  ansible.builtin.file:
-    path: /etc/nginx/conf.d/00-matrix-bootstrap.conf
-    state: absent
-  when: nginx_web_cert_after.stat.exists and nginx_turn_cert_after.stat.exists
+- name: Remove bootstrap Nginx configuration
+  ansible.builtin.file: {path: /etc/nginx/conf.d/00-matrix-bootstrap.conf, state: absent}
   notify: Reload Nginx
-
-- name: Проверить синтаксис Nginx
+- name: Validate production Nginx configuration
   ansible.builtin.command: nginx -t
-  register: nginx_test
   changed_when: false
-  failed_when: nginx_test.rc != 0
-
-- name: Reload Nginx
+- name: Apply production Nginx configuration
   ansible.builtin.meta: flush_handlers
