@@ -1,11 +1,11 @@
 ---
 - name: Обновить кеш apt
-  apt:
+  ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 86400
 
 - name: Установить базовые пакеты
-  apt:
+  ansible.builtin.apt:
     name:
       - ca-certificates
       - curl
@@ -19,18 +19,18 @@
       - acl
       - openssl
 
-- name: Установить Python SDK Docker из официального PyPI
+- name: Установить Python SDK Docker
   ansible.builtin.apt:
     name: python3-docker
     state: present
 
 - name: Создать системную группу Matrix
-  group:
+  ansible.builtin.group:
     name: "{{ matrix_system_group }}"
     system: true
 
 - name: Создать системного пользователя Matrix
-  user:
+  ansible.builtin.user:
     name: "{{ matrix_system_user }}"
     group: "{{ matrix_system_group }}"
     shell: /usr/sbin/nologin
@@ -38,7 +38,7 @@
     create_home: false
 
 - name: Создать корневую директорию стека
-  file:
+  ansible.builtin.file:
     path: "{{ matrix_root_dir }}"
     state: directory
     owner: "{{ matrix_system_user }}"
@@ -46,7 +46,7 @@
     mode: "0750"
 
 - name: Создать директорию для секретов
-  file:
+  ansible.builtin.file:
     path: "{{ matrix_root_dir }}/.secrets"
     state: directory
     owner: root
@@ -55,10 +55,11 @@
 
 - name: Map host architecture to Debian repository architecture
   ansible.builtin.set_fact:
-    matrix_deb_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] | default('') }}"
+    matrix_deb_arch: >-
+      {{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] | default('') }}
 
 - name: Require a supported CPU architecture
   ansible.builtin.assert:
     that:
       - matrix_deb_arch | length > 0
-    fail_msg: "Unsupported architecture for Matrix Deploy: {{ ansible_architecture }}"
+    fail_msg: "Unsupported architecture for Matrix Deploy: {{ ansible_facts['architecture'] }}"
