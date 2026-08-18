@@ -1,0 +1,106 @@
+---
+- name: Back up Matrix deployment state
+  hosts: matrix_hosts
+  become: true
+  gather_facts: true
+
+  vars:
+    matrix_backup_root: /var/backups/matrix-deploy
+    matrix_backup_id: "{{ ansible_date_time.iso8601_basic_short }}"
+    matrix_backup_dir: "{{ matrix_backup_root }}/{{ matrix_backup_id }}"
+    matrix_backup_candidates:
+      - "{{ matrix_root_dir }}/.secrets"
+      - "{{ synapse_data_dir }}/homeserver.yaml"
+      - "{{ synapse_data_dir }}/log.config"
+      - "{{ synapse_data_dir }}/{{ matrix_domains.synapse }}.signing.key"
+      - "{{ synapse_app_service_dir }}"
+      - "{{ element_web_root }}"
+      - "{{ synad_root }}"
+      - "{{ element_call_root }}"
+      - "{{ livekit_config_path }}"
+      - "{{ livekit_cert_dir }}"
+      - /etc/nginx/conf.d/10-matrix.conf
+      - /etc/nginx/conf.d/00-matrix-bootstrap.conf
+      - /etc/turnserver.conf
+      - /etc/turnserver/certs
+      - /etc/fail2ban/jail.d/00-matrix-base.local
+      - /etc/letsencrypt
+
+  tasks:
+    - name: Create protected backup directory
+      ansible.builtin.file:
+        path: "{{ matrix_backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Create PostgreSQL logical backup
+      ansible.builtin.shell: >-
+        set -o pipefail &&
+        docker exec postgres
+        pg_dump -U {{ postgresql_synapse_user | quote }}
+        -d {{ postgresql_synapse_db | quote }}
+        -Fc > {{ (matrix_backup_dir ~ '/synapse.pgdump') | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Check backup candidate paths
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ matrix_backup_candidates }}"
+      register: matrix_backup_candidate_stats
+
+    - name: Build existing backup path list
+      ansible.builtin.set_fact:
+        matrix_backup_existing_paths: >-
+          {{ (matrix_backup_existing_paths | default([])) + [item.item] }}
+      loop: "{{ matrix_backup_candidate_stats.results }}"
+      when: item.stat.exists
+
+    - name: Archive Matrix configuration and secrets
+      ansible.builtin.command:
+        argv: "{{ ['tar', '-czf', matrix_backup_dir ~ '/config-state.tar.gz'] + (matrix_backup_existing_paths | default([])) }}"
+      changed_when: true
+
+    - name: Capture Docker container state
+      ansible.builtin.shell: >-
+        docker inspect $(docker ps -aq) > {{ (matrix_backup_dir ~ '/docker-inspect.json') | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Capture Docker image inventory
+      ansible.builtin.shell: >-
+        docker images --digests --no-trunc > {{ (matrix_backup_dir ~ '/docker-images.txt') | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Capture UFW state
+      ansible.builtin.shell: >-
+        ufw status numbered > {{ (matrix_backup_dir ~ '/ufw-status.txt') | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Write backup manifest
+      ansible.builtin.copy:
+        dest: "{{ matrix_backup_dir }}/MANIFEST.txt"
+        owner: root
+        group: root
+        mode: '0600'
+        content: |
+          Matrix Deploy backup
+          created_utc={{ ansible_date_time.iso8601 }}
+          server_name={{ matrix_domains.synapse }}
+          public_ipv4={{ matrix_external_ip }}
+          database={{ postgresql_synapse_db }}
+          media_store_included=false
+          postgres_data_directory_included=false
+          restore_requires_explicit_operator_action=true
+
+    - name: Show backup location
+      ansible.builtin.debug:
+        msg: "Matrix backup created at {{ matrix_backup_dir }}"
