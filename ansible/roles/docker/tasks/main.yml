@@ -2,8 +2,8 @@
 - name: Проверить поддержку репозитория Docker для текущего дистрибутива
   ansible.builtin.assert:
     that:
-      - ansible_distribution == "Ubuntu"
-      - ansible_distribution_release == "noble"
+      - ansible_facts['distribution'] == "Ubuntu"
+      - ansible_facts['distribution_release'] == "noble"
     fail_msg: "Matrix Deploy поддерживает Docker deployment только на Ubuntu 24.04 LTS (noble)."
 
 - name: Создать директорию для ключей apt
@@ -20,7 +20,9 @@
 
 - name: Добавить репозиторий Docker
   ansible.builtin.apt_repository:
-    repo: "deb [arch={{ matrix_deb_arch }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    repo: >-
+      deb [arch={{ matrix_deb_arch }} signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable
     filename: docker
     state: present
 
