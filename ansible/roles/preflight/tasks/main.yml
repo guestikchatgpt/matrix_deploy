@@ -23,7 +23,6 @@
       - matrix_base_domain | length > 3
       - matrix_external_ip | length >= 7
       - certbot_email | length > 3
-      - matrix_admin_password | default('') | length > 0
       - coturn_network_mode in ['direct_public', 'nat']
       - coturn_relay_ip | length >= 7
       - matrix_ssh_port | int > 0
