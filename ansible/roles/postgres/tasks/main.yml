@@ -49,25 +49,25 @@
   ansible.builtin.set_fact:
     postgresql_effective_tuning:
       shared_buffers_mb: >-
-        {{ [([((ansible_memtotal_mb | int) * 0.125) | int, 256] | max),
+        {{ [([((ansible_facts['memtotal_mb'] | int) * 0.125) | int, 256] | max),
              (postgresql_tuning.shared_buffers_mb | int)] | min }}
       effective_cache_size_mb: >-
-        {{ [([((ansible_memtotal_mb | int) * 0.50) | int, 1024] | max),
+        {{ [([((ansible_facts['memtotal_mb'] | int) * 0.50) | int, 1024] | max),
              (postgresql_tuning.effective_cache_size_mb | int)] | min }}
       maintenance_work_mem_mb: >-
-        {{ [([((ansible_memtotal_mb | int) * 0.03) | int, 128] | max),
+        {{ [([((ansible_facts['memtotal_mb'] | int) * 0.03) | int, 128] | max),
              (postgresql_tuning.maintenance_work_mem_mb | int)] | min }}
       autovacuum_work_mem_mb: >-
-        {{ [([((ansible_memtotal_mb | int) * 0.015) | int, 64] | max),
+        {{ [([((ansible_facts['memtotal_mb'] | int) * 0.015) | int, 64] | max),
              (postgresql_tuning.autovacuum_work_mem_mb | int)] | min }}
       work_mem_mb: >-
-        {{ [((16 if (ansible_memtotal_mb | int) >= 4096 else 8) | int),
+        {{ [((16 if (ansible_facts['memtotal_mb'] | int) >= 4096 else 8) | int),
              (postgresql_tuning.work_mem_mb | int)] | min }}
       max_connections: "{{ postgresql_tuning.max_connections | int }}"
       max_wal_size: "{{ postgresql_tuning.max_wal_size }}"
       min_wal_size: "{{ postgresql_tuning.min_wal_size }}"
       max_parallel_workers: >-
-        {{ [([ansible_processor_vcpus | default(ansible_processor_count) | int, 1] | max),
+        {{ [([ansible_facts.get('processor_vcpus', ansible_facts.get('processor_count', 1)) | int, 1] | max),
              (postgresql_tuning.max_parallel_workers | int)] | min }}
       max_parallel_workers_per_gather: >-
         {{ postgresql_tuning.max_parallel_workers_per_gather | int }}
