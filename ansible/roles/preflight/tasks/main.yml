@@ -83,14 +83,18 @@
   changed_when: false
   failed_when: false
 
-- name: Require every Matrix A record to resolve to configured public IPv4
+- name: Require every Matrix hostname to resolve only to configured public IPv4
   ansible.builtin.assert:
     that:
       - item.rc == 0
-      - matrix_external_ip in item.stdout
+      - >-
+        (item.stdout |
+         regex_findall('(?m)^([0-9]+(?:\.[0-9]+){3})\s') |
+         unique | list) == [matrix_external_ip]
     fail_msg: >-
       DNS A validation failed for {{ item.item }}.
-      Expected {{ matrix_external_ip }}, got: {{ item.stdout | default('unresolved') }}
+      Every published A record must resolve to {{ matrix_external_ip }}.
+      Resolver output: {{ item.stdout | default('unresolved') }}
   loop: "{{ matrix_dns_a.results }}"
 
 - name: Resolve AAAA records when IPv6 support is disabled
@@ -152,22 +156,13 @@
 
 - name: Build fresh-install reserved port list
   ansible.builtin.set_fact:
-    matrix_preflight_reserved_ports:
-      - 80
-      - 443
-      - 8448
-      - 5432
-      - 8008
-      - "{{ element_web_host_port }}"
-      - "{{ synad_host_port }}"
-      - "{{ element_call_host_port }}"
-      - "{{ element_jwt_host_port }}"
-      - "{{ coturn_udp_port }}"
-      - "{{ coturn_tls_port }}"
-      - "{{ livekit_turn_udp_port }}"
-      - "{{ livekit_turn_tls_port }}"
-      - "{{ livekit_http_port }}"
-      - "{{ livekit_rtc_tcp_port }}"
+    matrix_preflight_reserved_ports: >-
+      {{ [80, 443, 5432, 8008,
+          element_web_host_port, synad_host_port, element_call_host_port,
+          element_jwt_host_port, coturn_udp_port, coturn_tls_port,
+          livekit_turn_udp_port, livekit_turn_tls_port,
+          livekit_http_port, livekit_rtc_tcp_port] +
+         ([8448] if synapse_enable_federation | bool else []) }}
 
 - name: Reject conflicting listeners on a fresh host
   ansible.builtin.assert:
