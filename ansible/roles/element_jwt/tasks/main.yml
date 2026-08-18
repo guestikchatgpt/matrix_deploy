@@ -28,3 +28,4 @@
   retries: 20
   delay: 2
   until: element_jwt_ready.status | default(0) == 200
+  when: not ansible_check_mode
