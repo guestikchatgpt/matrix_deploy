@@ -126,3 +126,46 @@ Before considering a release candidate complete:
 7. legacy TURN relay check;
 8. MatrixRTC local/federated audio+video calls including embedded TURN relay where possible;
 9. final verifier with zero mandatory failures.
+
+## Implementation status — `agent/roadmap-hardening`
+
+### Implemented in code
+
+- [x] Generic topology/subdomain model; no production domain/IP hard-coding in executable content.
+- [x] Pinned controller/collection versions and pinned service versions; Ketesa `latest` remains the single explicit exception.
+- [x] Interactive bootstrap/launcher with persisted topology and preflight.
+- [x] Direct-public/NAT distinction and active SSH-port detection.
+- [x] Explicit IPv6-disabled behavior with AAAA rejection.
+- [x] Deterministic PostgreSQL configuration, conservative tuning and major-version guard.
+- [x] Synapse policy/metrics/federation wiring and database-backed admin reconciliation.
+- [x] Element permalink correction and Ketesa migration.
+- [x] Production-proven LiveKit/JWT MatrixRTC security model and explicit embedded TURN relay range.
+- [x] Independent hardened legacy Coturn contour with NAT mapping support.
+- [x] ACME-safe Nginx bootstrap/production routing, SAN reconciliation, incomplete-lineage recovery and selective deploy hook.
+- [x] Desired-state UFW including stale public 7880 removal.
+- [x] Dedicated Fail2ban SSH baseline role with control-socket race handling.
+- [x] Production-proven parameterized verifier and optional deep Certbot renewal test.
+- [x] Bounded Docker container logging.
+- [x] `converge.sh`, `check.sh`, backup-first `upgrade.sh` and guarded `destroy.sh`.
+- [x] Protected backup format; destructive destroy requires a full backup including Synapse media.
+- [x] GitHub Actions static/YAML/shell/Ansible syntax gate.
+- [x] Operator README and explicit restore runbook/contract.
+
+### Deliberately deferred until integration testing
+
+- [ ] Automated `restore.sh`. Backup format and restore sequence are documented, but automation is withheld until a full destroy/restore test succeeds.
+- [ ] Matrix/Nginx Fail2ban filters. Add only after `fail2ban-regex` validation against real logs.
+- [ ] Full IPv6 deployment mode.
+- [ ] TURN/TLS on public TCP 443; requires a separate IP or deliberate L4/SNI design.
+
+### Release gates still requiring a disposable/real Ubuntu host
+
+- [ ] Fresh Ubuntu 24.04 installation from `bootstrap.sh`.
+- [ ] Second `converge.sh` run with no unintended changes.
+- [ ] Reboot and persistence verification.
+- [ ] `verify.sh --deep` / Certbot staging renewal on the clean-host deployment.
+- [ ] Incoming/outgoing federation checks when federation is enabled.
+- [ ] Legacy Coturn authenticated relay test.
+- [ ] Local and federated MatrixRTC audio/video calls; confirm embedded TURN relay availability.
+- [ ] Full backup -> destroy -> restore rehearsal before exposing automated restore.
+- [ ] Final verifier with zero mandatory failures on the release-candidate host.
