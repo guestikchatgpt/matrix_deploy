@@ -59,6 +59,24 @@ container_check() {
     fi
 }
 
+container_image_check() {
+    local name="$1"
+    local expected="$2"
+    local configured_ref
+    local running_id
+    local expected_id
+
+    configured_ref="$(docker inspect "$name" --format '{% raw %}{{.Config.Image}}{% endraw %}' 2>/dev/null)" || configured_ref='missing'
+    running_id="$(docker inspect "$name" --format '{% raw %}{{.Image}}{% endraw %}' 2>/dev/null)" || running_id='missing'
+    expected_id="$(docker image inspect "$expected" --format '{% raw %}{{.Id}}{% endraw %}' 2>/dev/null)" || expected_id='missing'
+
+    if [ "$configured_ref" = "$expected" ] && [ "$running_id" = "$expected_id" ] && [ "$expected_id" != 'missing' ]; then
+        ok "image: $name = $expected"
+    else
+        fail "image: $name expected=$expected configured=$configured_ref running_id=$running_id expected_id=$expected_id"
+    fi
+}
+
 http_check() {
     local label="$1"
     local url="$2"
@@ -119,6 +137,15 @@ section 'Docker-контейнеры'
 for c in postgres synapse element-web synad element-call element-jwt livekit; do
     container_check "$c"
 done
+
+section 'Version lock / Docker images'
+container_image_check 'postgres' '{{ postgresql_image }}'
+container_image_check 'synapse' '{{ synapse_image }}'
+container_image_check 'element-web' '{{ element_web_image }}'
+container_image_check 'synad' '{{ synad_image }}'
+container_image_check 'element-call' '{{ element_call_image }}'
+container_image_check 'element-jwt' '{{ element_jwt_image }}'
+container_image_check 'livekit' '{{ livekit_image }}'
 
 section 'Сетевые listeners'
 listener_check 'nginx HTTP :80' 80
