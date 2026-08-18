@@ -10,5 +10,14 @@ readonly CONFIG_FILE="/etc/matrix-deploy/deployment.yml"
 [[ -x "$ANSIBLE_PLAYBOOK" ]] || { echo 'ERROR: run ./bootstrap.sh first' >&2; exit 1; }
 [[ -r "$CONFIG_FILE" ]] || { echo "ERROR: deployment config not found: $CONFIG_FILE" >&2; exit 1; }
 
+include_media=false
+case "${1:-}" in
+  '') ;;
+  --include-media) include_media=true ;;
+  *) echo "ERROR: unknown option: ${1}" >&2; exit 1 ;;
+esac
+
 cd "$ANSIBLE_DIR"
-exec "$ANSIBLE_PLAYBOOK" playbooks/backup.yml --extra-vars "@${CONFIG_FILE}"
+exec "$ANSIBLE_PLAYBOOK" playbooks/backup.yml \
+  --extra-vars "@${CONFIG_FILE}" \
+  --extra-vars "matrix_backup_include_media=${include_media}"
