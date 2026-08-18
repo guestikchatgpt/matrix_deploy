@@ -30,18 +30,6 @@
         group: root
         mode: '0700'
 
-    - name: Определить внешний IP через ipify
-      uri:
-        url: https://api.ipify.org
-        return_content: true
-        timeout: 10
-      register: ipify_lookup
-      ignore_errors: true
-
-    - name: Установить внешний IP
-      set_fact:
-        matrix_external_ip: "{{ ipify_lookup.content | default(matrix_external_ip) }}"
-
     - name: Задать путь к секрету TURN
       set_fact:
         turn_secret_path: "{{ matrix_root_dir }}/.secrets/turn_shared_secret"
