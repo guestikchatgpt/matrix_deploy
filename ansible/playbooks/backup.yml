@@ -9,6 +9,7 @@
     matrix_backup_id: "{{ ansible_facts['date_time']['iso8601_basic_short'] }}"
     matrix_backup_dir: "{{ matrix_backup_root }}/{{ matrix_backup_id }}"
     matrix_backup_include_media: false
+    matrix_backup_version_lock: /etc/matrix-deploy/versions.yml
     matrix_backup_candidates:
       - /etc/matrix-deploy
       - "{{ matrix_root_dir }}/.secrets"
@@ -36,6 +37,20 @@
         owner: root
         group: root
         mode: '0700'
+
+    - name: Check runtime version lock before backup
+      ansible.builtin.stat:
+        path: "{{ matrix_backup_version_lock }}"
+      register: matrix_backup_version_lock_stat
+
+    - name: Calculate runtime version lock SHA-256
+      ansible.builtin.command:
+        argv:
+          - sha256sum
+          - "{{ matrix_backup_version_lock }}"
+      register: matrix_backup_version_lock_sha
+      changed_when: false
+      when: matrix_backup_version_lock_stat.stat.exists
 
     - name: Check PostgreSQL container state before logical backup
       ansible.builtin.command:
@@ -147,6 +162,8 @@
           database={{ postgresql_synapse_db }}
           media_store_included={{ matrix_backup_include_media | bool | lower }}
           postgres_data_directory_included=false
+          version_lock_present={{ matrix_backup_version_lock_stat.stat.exists | bool | lower }}
+          version_lock_sha256={{ (matrix_backup_version_lock_sha.stdout.split()[0] if matrix_backup_version_lock_stat.stat.exists else 'missing') }}
           restore_requires_explicit_operator_action=true
 
     - name: Show backup location
