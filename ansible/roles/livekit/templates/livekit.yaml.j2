@@ -3,14 +3,19 @@ bind_addresses:
   - 0.0.0.0
 port: {{ livekit_http_port }}
 keys:
- {{ livekit_api_key }}: {{ livekit_api_secret }}
+  {{ livekit_api_key }}: {{ livekit_api_secret }}
 
 rtc:
   tcp_port: {{ livekit_rtc_tcp_port }}
   port_range_start: {{ livekit_port_range_start }}
   port_range_end: {{ livekit_port_range_end }}
+{% if coturn_network_mode == 'nat' %}
+  use_external_ip: true
+  require_ipv4: true
+{% else %}
   use_external_ip: false
-  node_ip: "{{ matrix_external_ip | default(ansible_default_ipv4.address, true) }}"
+  node_ip: "{{ matrix_external_ip }}"
+{% endif %}
 
 turn:
   enabled: true
@@ -18,9 +23,11 @@ turn:
   tls_port: {{ livekit_turn_tls_port }}
   domain: {{ matrix_domains.livekit }}
   external_tls: false
+  relay_range_start: {{ livekit_turn_relay_range_start }}
+  relay_range_end: {{ livekit_turn_relay_range_end }}
   cert_file: /etc/ssl/livekit/turn.crt
-  key_file:  /etc/ssl/livekit/turn.key
+  key_file: /etc/ssl/livekit/turn.key
 
 room:
   enable_remote_unmute: false
-  auto_create: true
+  auto_create: {{ livekit_room_auto_create | bool | lower }}
