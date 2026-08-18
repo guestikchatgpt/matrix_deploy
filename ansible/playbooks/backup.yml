@@ -120,6 +120,19 @@
         executable: /bin/bash
       changed_when: true
 
+    - name: Protect backup artifacts that may contain secrets
+      ansible.builtin.file:
+        path: "{{ matrix_backup_dir }}/{{ item }}"
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        - synapse.pgdump
+        - config-state.tar.gz
+        - docker-inspect.json
+        - docker-images.txt
+        - ufw-status.txt
+
     - name: Write backup manifest
       ansible.builtin.copy:
         dest: "{{ matrix_backup_dir }}/MANIFEST.txt"
