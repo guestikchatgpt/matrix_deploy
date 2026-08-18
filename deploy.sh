@@ -7,6 +7,7 @@ readonly ANSIBLE_PLAYBOOK="${REPO_ROOT}/.venv/bin/ansible-playbook"
 readonly STATE_DIR="/etc/matrix-deploy"
 readonly RUNTIME_DIR="/run/matrix-deploy"
 readonly CONFIG_FILE="${STATE_DIR}/deployment.yml"
+readonly VERSION_LOCK_FILE="${STATE_DIR}/versions.yml"
 readonly SECRET_FILE="${RUNTIME_DIR}/secrets.yml"
 
 log() {
@@ -203,23 +204,28 @@ printf 'Public IPv4: %s\n' "$MATRIX_EXTERNAL_IP"
 printf 'Federation:  %s\n' "$FEDERATION"
 printf 'Runtime config: %s\n\n' "$CONFIG_FILE"
 
-log 'запускаю Ansible preflight'
+log 'запускаю Ansible preflight и определяю актуальные stable-версии upstream'
 (
   cd "$ANSIBLE_DIR"
   "$ANSIBLE_PLAYBOOK" playbooks/preflight.yml \
     --extra-vars "@${CONFIG_FILE}" \
-    --extra-vars "@${SECRET_FILE}"
+    --extra-vars "@${SECRET_FILE}" \
+    --extra-vars 'matrix_refresh_versions=true'
 )
+
+[[ -r "$VERSION_LOCK_FILE" ]] || fatal "preflight не создал lock версий: $VERSION_LOCK_FILE"
 
 if ! prompt_yes_no 'Preflight успешен. Запустить деплой?' 'n'; then
   printf 'Деплой отменён. Конфигурация сохранена: %s\n' "$CONFIG_FILE"
+  printf 'Выбранные версии сохранены: %s\n' "$VERSION_LOCK_FILE"
   exit 0
 fi
 
-log 'запускаю основной playbook'
+log 'запускаю основной playbook с версиями из preflight lock'
 (
   cd "$ANSIBLE_DIR"
   "$ANSIBLE_PLAYBOOK" playbooks/site.yml \
     --extra-vars "@${CONFIG_FILE}" \
+    --extra-vars "@${VERSION_LOCK_FILE}" \
     --extra-vars "@${SECRET_FILE}"
 )
