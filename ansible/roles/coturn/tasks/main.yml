@@ -50,7 +50,6 @@
     mode: "0600"
     remote_src: true
   notify: Restart coturn
-# ---------------------------------
 
 - name: Включить системный сервис coturn
   ansible.builtin.lineinfile:
@@ -60,15 +59,28 @@
     create: true
   notify: Restart coturn
 
+- name: Derive Matrix Docker peer range for Coturn protection
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - "import ipaddress,sys; n=ipaddress.ip_network(sys.argv[1], strict=False); print(f'{n.network_address}-{n.broadcast_address}')"
+      - "{{ docker_network_subnet }}"
+  register: coturn_matrix_docker_peer_range_cmd
+  changed_when: false
+
+- name: Store Matrix Docker peer deny range
+  ansible.builtin.set_fact:
+    coturn_matrix_docker_peer_range: "{{ coturn_matrix_docker_peer_range_cmd.stdout | trim }}"
+
 - name: Сконфигурировать coturn
   ansible.builtin.template:
     src: turnserver.conf.j2
     dest: /etc/turnserver.conf
-    owner: turnserver     
-    group: turnserver    
+    owner: turnserver
+    group: turnserver
     mode: "0640"
   notify: Restart coturn
-
 
 - name: Применить изменения Coturn немедленно
   ansible.builtin.meta: flush_handlers

@@ -1,24 +1,49 @@
-# Managed by Ansible
+# Managed by Ansible - legacy Matrix TURN
 listening-port={{ coturn_udp_port }}
 tls-listening-port={{ coturn_tls_port }}
 listening-ip=0.0.0.0
-relay-ip={{ matrix_external_ip | default(ansible_default_ipv4.address, true) }}
-external-ip={{ matrix_external_ip | default(ansible_default_ipv4.address, true) }}
+relay-ip={{ coturn_relay_ip }}
+{% if coturn_network_mode == 'nat' %}
+external-ip={{ matrix_external_ip }}/{{ coturn_relay_ip }}
+{% else %}
+external-ip={{ matrix_external_ip }}
+{% endif %}
 min-port={{ coturn_min_port }}
 max-port={{ coturn_max_port }}
+
 fingerprint
 lt-cred-mech
 use-auth-secret
 static-auth-secret={{ turn_shared_secret }}
 server-name={{ matrix_domains.turn }}
 realm={{ matrix_domains.turn }}
+
 cert={{ coturn_cert_path }}
 pkey={{ coturn_key_path }}
-no-stdout-log
-log-file=/var/log/turnserver/turn.log
-no-multicast-peers
-no-loopback-peers
 no-tlsv1
 no-tlsv1_1
+
+no-stdout-log
+log-file=/var/log/turnserver/turn.log
+
+no-multicast-peers
+no-loopback-peers
+
+# Prevent TURN from becoming a proxy into special/reserved networks. Private
+# 10/8 and 192.168/16 are intentionally not denied globally: real clients and
+# peers may legitimately use them.
+denied-peer-ip=0.0.0.0-0.255.255.255
+denied-peer-ip=100.64.0.0-100.127.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=192.0.0.0-192.0.0.255
+denied-peer-ip=192.0.2.0-192.0.2.255
+denied-peer-ip=198.18.0.0-198.19.255.255
+denied-peer-ip=198.51.100.0-198.51.100.255
+denied-peer-ip=203.0.113.0-203.0.113.255
+denied-peer-ip=224.0.0.0-239.255.255.255
+denied-peer-ip=240.0.0.0-255.255.255.255
+denied-peer-ip=172.17.0.0-172.17.255.255
+denied-peer-ip={{ coturn_matrix_docker_peer_range }}
+
 dh-file=/etc/ssl/certs/dhparam.pem
 cli-password={{ coturn_cli_password }}
