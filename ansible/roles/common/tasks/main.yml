@@ -49,8 +49,8 @@
   file:
     path: "{{ matrix_root_dir }}/.secrets"
     state: directory
-    owner: "{{ matrix_system_user }}"
-    group: "{{ matrix_system_group }}"
+    owner: root
+    group: root
     mode: "0700"
 
 - name: Map host architecture to Debian repository architecture
