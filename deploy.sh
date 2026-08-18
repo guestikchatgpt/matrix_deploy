@@ -47,7 +47,7 @@ detect_ssh_port() {
   local port=''
 
   if command -v sshd >/dev/null 2>&1; then
-    port="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')"
+    port="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}')"
   fi
 
   if [[ -z "$port" && -n "${SSH_CONNECTION:-}" ]]; then
@@ -59,7 +59,10 @@ detect_ssh_port() {
 
 is_local_ipv4() {
   local address="$1"
-  ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -Fxq -- "$address"
+  local addresses
+
+  addresses="$(ip -4 -o addr show 2>/dev/null | awk '{split($4, a, "/"); print a[1]}')"
+  grep -Fxq -- "$address" <<<"$addresses"
 }
 
 if [[ ${EUID} -ne 0 ]]; then
@@ -112,7 +115,7 @@ if is_local_ipv4 "$MATRIX_EXTERNAL_IP"; then
   printf 'Сетевой режим TURN: direct_public\n'
 else
   COTURN_NETWORK_MODE='nat'
-  DEFAULT_RELAY_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+  DEFAULT_RELAY_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") print $(i+1)}')"
   COTURN_RELAY_IP="$(prompt_default 'Public IPv4 не назначен хосту. Локальный relay IP для Coturn' "$DEFAULT_RELAY_IP")"
   printf 'Сетевой режим TURN: NAT (%s -> %s)\n' "$COTURN_RELAY_IP" "$MATRIX_EXTERNAL_IP"
   printf 'Внешний NAT должен пробрасывать TURN/RTC порты на этот сервер.\n'
