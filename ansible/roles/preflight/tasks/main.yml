@@ -124,24 +124,32 @@
   register: matrix_local_ipv4
   changed_when: false
 
+- name: Build exact local IPv4 address list
+  ansible.builtin.set_fact:
+    matrix_local_ipv4_addresses: >-
+      {{ matrix_local_ipv4.stdout |
+         regex_findall('(?:^|\s)inet\s+([0-9]+(?:\.[0-9]+){3})/') |
+         unique | list }}
+
 - name: Validate direct-public Coturn mode
   ansible.builtin.assert:
     that:
-      - matrix_external_ip in matrix_local_ipv4.stdout
+      - matrix_external_ip in matrix_local_ipv4_addresses
       - coturn_relay_ip == matrix_external_ip
     fail_msg: >-
       direct_public mode requires matrix_external_ip to be assigned locally and
-      coturn_relay_ip to match it.
+      coturn_relay_ip to match it. Local IPv4 addresses: {{ matrix_local_ipv4_addresses }}
   when: coturn_network_mode == 'direct_public'
 
 - name: Validate NAT Coturn mode
   ansible.builtin.assert:
     that:
-      - coturn_relay_ip in matrix_local_ipv4.stdout
-      - matrix_external_ip not in matrix_local_ipv4.stdout
+      - coturn_relay_ip in matrix_local_ipv4_addresses
+      - matrix_external_ip not in matrix_local_ipv4_addresses
     fail_msg: >-
       NAT mode requires coturn_relay_ip to be a local address and
       matrix_external_ip to be the public translated address.
+      Local IPv4 addresses: {{ matrix_local_ipv4_addresses }}
   when: coturn_network_mode == 'nat'
 
 - name: Collect local listening sockets
