@@ -31,28 +31,78 @@ jobs:
       - name: Parse YAML and enforce deployment invariants
         run: python tools/static_checks.py
 
-      - name: Validate pinned container image references and architectures
+      - name: Validate shell and Python syntax
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY' > /tmp/matrix-deploy-images.txt
+          for script in ./*.sh; do
+            bash -n "$script"
+          done
+          python -m py_compile tools/resolve_versions.py tools/static_checks.py
+
+      - name: Exercise bootstrap preparation on Ubuntu 24.04
+        shell: bash
+        run: sudo ./bootstrap.sh --prepare-only
+
+      - name: Exercise NAT preflight and dynamic stable-version resolution
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          sudo rm -f /etc/matrix-deploy/versions.yml
+
+          relay_ip="$(ip -4 route get 1.1.1.1 | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+          test -n "$relay_ip"
+
+          # sslip.io resolves arbitrary subdomains containing this IPv4 to the
+          # encoded address, so this exercises real DNS A/AAAA queries without
+          # mutating /etc/hosts or requiring project-owned test DNS.
+          public_ip='8.8.8.8'
+          base_domain='8-8-8-8.sslip.io'
+
+          cat > /tmp/matrix-ci-preflight.yml <<EOF
+          ---
+          matrix_base_domain: "${base_domain}"
+          matrix_external_ip: "${public_ip}"
+          certbot_email: "ci@example.invalid"
+          matrix_ssh_port: 22
+          matrix_ipv6_enabled: false
+          synapse_enable_federation: true
+          coturn_network_mode: "nat"
+          coturn_relay_ip: "${relay_ip}"
+          matrix_refresh_versions: true
+          EOF
+
+          (
+            cd ansible
+            sudo --preserve-env=GITHUB_TOKEN ../.venv/bin/ansible-playbook playbooks/preflight.yml \
+              --extra-vars '@/tmp/matrix-ci-preflight.yml'
+          )
+
+          sudo test -s /etc/matrix-deploy/versions.yml
+          sudo cat /etc/matrix-deploy/versions.yml
+
+      - name: Validate dynamically resolved image references and architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo python - <<'PY' > /tmp/matrix-deploy-images.txt
           import pathlib
           import yaml
 
-          versions = yaml.safe_load(
-              pathlib.Path('ansible/inventory/group_vars/all/versions.yml').read_text()
+          lock = yaml.safe_load(
+              pathlib.Path('/etc/matrix-deploy/versions.yml').read_text()
           ) or {}
-          images = sorted(
-              value for key, value in versions.items()
-              if key.endswith('_image') and isinstance(value, str)
-          )
-          if not images:
-              raise SystemExit('no container image references found')
+          images = lock.get('matrix_resolved_images') or []
+          if len(images) != 7:
+              raise SystemExit(f'expected 7 resolved images, got {len(images)}: {images}')
           print('\n'.join(images))
           PY
 
           while IFS= read -r image; do
-            printf 'Checking image manifest: %s\n' "$image"
+            printf 'Checking resolved image manifest: %s\n' "$image"
             manifest="/tmp/matrix-image-manifest.json"
             docker manifest inspect "$image" > "$manifest"
             python - "$image" "$manifest" <<'PY'
@@ -74,50 +124,6 @@ jobs:
           print(f'{image}: amd64+arm64 OK')
           PY
           done < /tmp/matrix-deploy-images.txt
-
-      - name: Validate shell syntax
-        shell: bash
-        run: |
-          set -euo pipefail
-          for script in ./*.sh; do
-            bash -n "$script"
-          done
-
-      - name: Exercise bootstrap preparation on Ubuntu 24.04
-        shell: bash
-        run: sudo ./bootstrap.sh --prepare-only
-
-      - name: Exercise NAT preflight runtime on a fresh runner
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          relay_ip="$(ip -4 route get 1.1.1.1 | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
-          test -n "$relay_ip"
-
-          # sslip.io resolves arbitrary subdomains containing this IPv4 to the
-          # encoded address, so this exercises real DNS A/AAAA queries without
-          # mutating /etc/hosts or requiring project-owned test DNS.
-          public_ip='8.8.8.8'
-          base_domain='8-8-8-8.sslip.io'
-
-          cat > /tmp/matrix-ci-preflight.yml <<EOF
-          ---
-          matrix_base_domain: "${base_domain}"
-          matrix_external_ip: "${public_ip}"
-          certbot_email: "ci@example.invalid"
-          matrix_ssh_port: 22
-          matrix_ipv6_enabled: false
-          synapse_enable_federation: true
-          coturn_network_mode: "nat"
-          coturn_relay_ip: "${relay_ip}"
-          EOF
-
-          (
-            cd ansible
-            sudo ../.venv/bin/ansible-playbook playbooks/preflight.yml \
-              --extra-vars '@/tmp/matrix-ci-preflight.yml'
-          )
 
       - name: Show Ansible versions
         working-directory: ansible
