@@ -1,6 +1,6 @@
 ---
-- name: Restart Synad
+- name: Restart Ketesa
   community.docker.docker_container:
-    name: "{{ synad_container_name | default('synad') }}" # или просто 'synad', как у вас в тасках
+    name: synad
     restart: true
     state: started

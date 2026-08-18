@@ -21,7 +21,7 @@
     name: element-web
     image: "{{ element_web_image }}"
     restart_policy: always
-    pull: true
+    pull: missing
     networks:
       - name: "{{ docker_network_name }}"
     published_ports:
