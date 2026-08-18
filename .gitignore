@@ -11,3 +11,6 @@
 .vscode/
 .idea/
 .DS_Store
+
+# Bootstrap Python environment
+.venv/

@@ -1,0 +1,205 @@
+---
+- name: Require Ubuntu 24.04 LTS
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Ubuntu'
+      - ansible_distribution_version is version('24.04', '>=')
+      - ansible_distribution_version is version('25.04', '<')
+      - ansible_distribution_release == 'noble'
+    fail_msg: >-
+      Matrix Deploy currently supports Ubuntu 24.04 LTS (noble) only.
+      Detected {{ ansible_distribution }} {{ ansible_distribution_version }}
+      ({{ ansible_distribution_release }}).
+
+- name: Require root-effective execution
+  ansible.builtin.assert:
+    that:
+      - ansible_effective_user_id | int == 0
+    fail_msg: 'Preflight must run with become/root privileges.'
+
+- name: Validate required deployment variables
+  ansible.builtin.assert:
+    that:
+      - matrix_base_domain | length > 3
+      - matrix_external_ip | length >= 7
+      - certbot_email | length > 3
+      - matrix_admin_password | default('') | length > 0
+      - coturn_network_mode in ['direct_public', 'nat']
+      - coturn_relay_ip | length >= 7
+      - matrix_ssh_port | int > 0
+      - matrix_ssh_port | int < 65536
+    fail_msg: 'Deployment variables are incomplete or invalid.'
+
+- name: Validate IPv4 variables with Python ipaddress
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - "import ipaddress,sys; a=ipaddress.ip_address(sys.argv[1]); assert a.version == 4"
+      - "{{ item }}"
+  loop:
+    - "{{ matrix_external_ip }}"
+    - "{{ coturn_relay_ip }}"
+  changed_when: false
+
+- name: Collect target FQDNs
+  ansible.builtin.set_fact:
+    matrix_preflight_domains:
+      - "{{ matrix_domains.synapse }}"
+      - "{{ matrix_domains.element }}"
+      - "{{ matrix_domains.admin }}"
+      - "{{ matrix_domains.element_call }}"
+      - "{{ matrix_domains.livekit }}"
+      - "{{ matrix_domains.turn }}"
+
+- name: Validate host resources
+  ansible.builtin.assert:
+    that:
+      - ansible_memtotal_mb | int >= 2048
+      - ansible_processor_vcpus | default(ansible_processor_count) | int >= 2
+    fail_msg: >-
+      Minimum supported host size is 2 vCPU and 2 GiB RAM.
+      Detected {{ ansible_processor_vcpus | default(ansible_processor_count) }} vCPU,
+      {{ ansible_memtotal_mb }} MiB RAM.
+
+- name: Read root filesystem free space
+  ansible.builtin.set_fact:
+    matrix_root_mount: >-
+      {{ (ansible_mounts | selectattr('mount', 'equalto', '/') | list | first) }}
+
+- name: Require at least 10 GiB free on root filesystem
+  ansible.builtin.assert:
+    that:
+      - matrix_root_mount.size_available | int >= 10737418240
+    fail_msg: 'At least 10 GiB free space is required on /.'
+
+- name: Resolve A records for Matrix hostnames
+  ansible.builtin.command:
+    argv:
+      - getent
+      - ahostsv4
+      - "{{ item }}"
+  loop: "{{ matrix_preflight_domains }}"
+  register: matrix_dns_a
+  changed_when: false
+  failed_when: false
+
+- name: Require every Matrix A record to resolve to configured public IPv4
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - matrix_external_ip in item.stdout
+    fail_msg: >-
+      DNS A validation failed for {{ item.item }}.
+      Expected {{ matrix_external_ip }}, got: {{ item.stdout | default('unresolved') }}
+  loop: "{{ matrix_dns_a.results }}"
+
+- name: Resolve AAAA records when IPv6 support is disabled
+  ansible.builtin.command:
+    argv:
+      - getent
+      - ahostsv6
+      - "{{ item }}"
+  loop: "{{ matrix_preflight_domains }}"
+  register: matrix_dns_aaaa
+  changed_when: false
+  failed_when: false
+  when: not matrix_ipv6_enabled | bool
+
+- name: Reject published AAAA while IPv6 mode is disabled
+  ansible.builtin.assert:
+    that:
+      - item.stdout | trim == ''
+    fail_msg: >-
+      {{ item.item }} publishes IPv6 records while matrix_ipv6_enabled=false.
+      Remove AAAA records or implement/enable the IPv6 deployment mode first.
+  loop: "{{ matrix_dns_aaaa.results | default([]) }}"
+  when: not matrix_ipv6_enabled | bool
+
+- name: Read local IPv4 addresses
+  ansible.builtin.command: ip -4 -o addr show
+  register: matrix_local_ipv4
+  changed_when: false
+
+- name: Validate direct-public Coturn mode
+  ansible.builtin.assert:
+    that:
+      - matrix_external_ip in matrix_local_ipv4.stdout
+      - coturn_relay_ip == matrix_external_ip
+    fail_msg: >-
+      direct_public mode requires matrix_external_ip to be assigned locally and
+      coturn_relay_ip to match it.
+  when: coturn_network_mode == 'direct_public'
+
+- name: Validate NAT Coturn mode
+  ansible.builtin.assert:
+    that:
+      - coturn_relay_ip in matrix_local_ipv4.stdout
+      - matrix_external_ip not in matrix_local_ipv4.stdout
+    fail_msg: >-
+      NAT mode requires coturn_relay_ip to be a local address and
+      matrix_external_ip to be the public translated address.
+  when: coturn_network_mode == 'nat'
+
+- name: Collect local listening sockets
+  ansible.builtin.command: ss -H -lntup
+  register: matrix_preflight_sockets
+  changed_when: false
+
+- name: Determine whether an existing managed deployment is present
+  ansible.builtin.stat:
+    path: "{{ matrix_root_dir }}"
+  register: matrix_existing_root
+
+- name: Build fresh-install reserved port list
+  ansible.builtin.set_fact:
+    matrix_preflight_reserved_ports:
+      - 80
+      - 443
+      - 8448
+      - 5432
+      - 8008
+      - "{{ element_web_host_port }}"
+      - "{{ synad_host_port }}"
+      - "{{ element_call_host_port }}"
+      - "{{ element_jwt_host_port }}"
+      - "{{ coturn_udp_port }}"
+      - "{{ coturn_tls_port }}"
+      - "{{ livekit_turn_udp_port }}"
+      - "{{ livekit_turn_tls_port }}"
+      - "{{ livekit_http_port }}"
+      - "{{ livekit_rtc_tcp_port }}"
+
+- name: Reject conflicting listeners on a fresh host
+  ansible.builtin.assert:
+    that:
+      - >-
+        (':' ~ (item | string) ~ ' ') not in matrix_preflight_sockets.stdout
+    fail_msg: >-
+      Port {{ item }} is already listening on a host without an existing
+      {{ matrix_root_dir }} deployment. Resolve the conflict before deployment.
+  loop: "{{ matrix_preflight_reserved_ports }}"
+  when:
+    - not matrix_existing_root.stat.exists
+    - item | int != matrix_ssh_port | int
+
+- name: Check apt repository reachability
+  ansible.builtin.uri:
+    url: https://archive.ubuntu.com/ubuntu/dists/noble/Release
+    method: HEAD
+    status_code: [200, 301, 302]
+    timeout: 10
+  changed_when: false
+
+- name: Preflight summary
+  ansible.builtin.debug:
+    msg:
+      - 'Ubuntu 24.04 LTS: OK'
+      - 'RAM: {{ ansible_memtotal_mb }} MiB'
+      - 'vCPU: {{ ansible_processor_vcpus | default(ansible_processor_count) }}'
+      - 'Public IPv4: {{ matrix_external_ip }}'
+      - 'Coturn mode: {{ coturn_network_mode }} (relay={{ coturn_relay_ip }})'
+      - 'SSH port: {{ matrix_ssh_port }}'
+      - 'Federation: {{ synapse_enable_federation }}'
+      - 'Existing managed root: {{ matrix_existing_root.stat.exists }}'
+      - 'DNS A validation: OK for {{ matrix_preflight_domains | length }} hostnames'

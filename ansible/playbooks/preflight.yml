@@ -1,0 +1,7 @@
+---
+- name: Matrix deployment preflight
+  hosts: matrix_hosts
+  become: true
+  gather_facts: true
+  roles:
+    - role: preflight
