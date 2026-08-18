@@ -4,6 +4,11 @@
   become: true
   gather_facts: true
 
+  module_defaults:
+    community.docker.docker_container:
+      log_driver: "{{ docker_container_log_driver }}"
+      log_options: "{{ docker_container_log_options }}"
+
   vars_prompt:
     - name: matrix_base_domain
       prompt: "Базовый домен (например example.com)"
