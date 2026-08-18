@@ -6,7 +6,7 @@
 
   vars:
     matrix_backup_root: /var/backups/matrix-deploy
-    matrix_backup_id: "{{ ansible_date_time.iso8601_basic_short }}"
+    matrix_backup_id: "{{ ansible_facts['date_time']['iso8601_basic_short'] }}"
     matrix_backup_dir: "{{ matrix_backup_root }}/{{ matrix_backup_id }}"
     matrix_backup_include_media: false
     matrix_backup_candidates:
@@ -141,7 +141,7 @@
         mode: '0600'
         content: |
           Matrix Deploy backup
-          created_utc={{ ansible_date_time.iso8601 }}
+          created_utc={{ ansible_facts['date_time']['iso8601'] }}
           server_name={{ matrix_domains.synapse }}
           public_ipv4={{ matrix_external_ip }}
           database={{ postgresql_synapse_db }}
