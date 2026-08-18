@@ -65,3 +65,18 @@ jobs:
               --syntax-check \
               --extra-vars '@../tests/ci-vars.yml'
           done
+
+      - name: Render and syntax-check verifier variants
+        working-directory: ansible
+        shell: bash
+        run: |
+          set -euo pipefail
+          for federation in true false; do
+            output="/tmp/matrix-stack-verify-${federation}.sh"
+            ansible localhost \
+              -m ansible.builtin.template \
+              -a "src=roles/verification/templates/verify.sh.j2 dest=${output} mode=0755" \
+              --extra-vars '@../tests/ci-vars.yml' \
+              --extra-vars "synapse_enable_federation=${federation}"
+            bash -n "$output"
+          done
