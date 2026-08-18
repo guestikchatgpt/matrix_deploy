@@ -1,4 +1,18 @@
 ---
+- name: Require resolved version lock variables for verification
+  ansible.builtin.assert:
+    that:
+      - postgresql_image is defined
+      - synapse_image is defined
+      - element_web_image is defined
+      - synad_image is defined
+      - element_call_image is defined
+      - element_jwt_image is defined
+      - livekit_image is defined
+    fail_msg: >-
+      Verification requires the resolved application version lock. Use verify.sh
+      or pass /etc/matrix-deploy/versions.yml as extra vars.
+
 - name: Install Matrix stack verifier
   ansible.builtin.template:
     src: verify.sh.j2
