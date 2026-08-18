@@ -51,6 +51,62 @@
       - "{{ coturn_relay_ip }}"
   changed_when: false
 
+- name: Ensure Matrix Deploy state directory exists for version lock
+  ansible.builtin.file:
+    path: "{{ matrix_version_lock_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Check existing resolved-version lock
+  ansible.builtin.stat:
+    path: "{{ matrix_version_lock_file }}"
+  register: matrix_version_lock_stat
+
+- name: Select version-resolution mode
+  ansible.builtin.set_fact:
+    matrix_version_resolution_mode: >-
+      {{ 'refresh' if (matrix_refresh_versions | bool or not matrix_version_lock_stat.stat.exists)
+         else 'check' }}
+
+- name: Resolve or check current stable upstream versions
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ playbook_dir }}/../../tools/resolve_versions.py"
+      - --policy
+      - "{{ playbook_dir }}/../inventory/group_vars/all/versions.yml"
+      - --lock
+      - "{{ matrix_version_lock_file }}"
+      - "{{ '--refresh' if matrix_version_resolution_mode == 'refresh' else '--check' }}"
+  environment:
+    GITHUB_TOKEN: "{{ lookup('env', 'GITHUB_TOKEN') | default('', true) }}"
+  register: matrix_version_resolution
+  changed_when: "'LOCK_UPDATED ' in matrix_version_resolution.stdout"
+
+- name: Show upstream version resolution
+  ansible.builtin.debug:
+    msg: "{{ matrix_version_resolution.stdout_lines }}"
+
+- name: Load resolved-version lock
+  ansible.builtin.include_vars:
+    file: "{{ matrix_version_lock_file }}"
+
+- name: Validate resolved-version lock
+  ansible.builtin.assert:
+    that:
+      - matrix_version_lock is mapping
+      - matrix_version_lock.schema | int == 1
+      - matrix_version_lock.components is mapping
+      - matrix_version_lock.components | length == matrix_version_sources | length
+      - matrix_resolved_images is sequence
+      - matrix_resolved_images | length == matrix_version_sources | length
+      - postgresql_version | string == postgresql_major | string
+    fail_msg: >-
+      Resolved version lock {{ matrix_version_lock_file }} is incomplete or incompatible.
+      Refresh it with upgrade.sh or remove it only on a fresh deployment.
+
 - name: Collect target FQDNs
   ansible.builtin.set_fact:
     matrix_preflight_domains:
@@ -216,5 +272,7 @@
       - 'Coturn mode: {{ coturn_network_mode }} (relay={{ coturn_relay_ip }})'
       - 'SSH port: {{ matrix_ssh_port }}'
       - 'Federation: {{ synapse_enable_federation }}'
+      - 'Version mode: {{ matrix_version_resolution_mode }}'
+      - 'Version lock: {{ matrix_version_lock_file }}'
       - 'Existing managed root: {{ matrix_existing_root.stat.exists }}'
       - 'DNS A validation: OK for {{ matrix_preflight_domains | length }} hostnames'
