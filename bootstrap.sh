@@ -62,4 +62,9 @@ log "устанавливаю pinned Ansible collections"
 log "проверяю Ansible"
 "${VENV_DIR}/bin/ansible-playbook" --version | sed -n '1,3p'
 
+if [[ ${1:-} == '--prepare-only' ]]; then
+  log "окружение подготовлено; интерактивный deploy пропущен"
+  exit 0
+fi
+
 exec "${REPO_ROOT}/deploy.sh" "$@"
