@@ -55,6 +55,8 @@ The target remains a reusable installer for a clean Ubuntu 24.04 LTS host. Produ
 - Pin Ansible collection versions after compatibility validation.
 - Pin every application image to a published release tag; moving `latest` tags are not accepted in the release-candidate matrix.
 - Validate every pinned image in CI against the registry and require both linux/amd64 and linux/arm64 manifests.
+- Avoid deprecated top-level Ansible fact injection; roles use `ansible_facts[...]` with injection disabled.
+- Manage third-party apt repositories with deb822 sources rather than deprecated `apt_repository` tasks.
 
 ## Nginx and ACME
 
@@ -138,8 +140,13 @@ Before considering a release candidate complete:
 - [x] Pinned controller/collection versions and fully pinned application image release tags.
 - [x] CI registry validation for every application image, including linux/amd64 and linux/arm64 manifests.
 - [x] Interactive bootstrap/launcher with persisted topology, input validation and preflight.
+- [x] CI executes `bootstrap.sh --prepare-only` on an Ubuntu 24.04 runner.
+- [x] CI executes NAT-mode preflight with real DNS A/AAAA resolution plus resource, port, routing and apt checks.
 - [x] Direct-public/NAT distinction, exact local-IP checks and active SSH-session port detection.
+- [x] DNS validation uses direct A/AAAA queries so IPv4-mapped NSS results cannot create false AAAA failures.
 - [x] Explicit IPv6-disabled behavior with AAAA rejection.
+- [x] Ansible roles use `ansible_facts[...]` with deprecated top-level fact injection disabled.
+- [x] Docker and Nginx repositories use `deb822_repository`; deprecated `apt_repository` is statically rejected.
 - [x] Deterministic PostgreSQL configuration, conservative tuning and major-version guard.
 - [x] Synapse policy/metrics/federation wiring and database-backed admin reconciliation.
 - [x] Partial-deploy recovery path with ephemeral `converge.sh --admin-password` secret handling.
@@ -167,7 +174,7 @@ Before considering a release candidate complete:
 
 ### Release gates still requiring a disposable/real Ubuntu host
 
-- [ ] Fresh Ubuntu 24.04 installation from `bootstrap.sh`.
+- [ ] Full fresh Ubuntu 24.04 installation from `bootstrap.sh` with real project DNS and Let's Encrypt.
 - [ ] Second `converge.sh` run with no unintended changes.
 - [ ] `check.sh` on the installed host; confirm useful diff/no runtime false failures.
 - [ ] Reboot and persistence verification.
