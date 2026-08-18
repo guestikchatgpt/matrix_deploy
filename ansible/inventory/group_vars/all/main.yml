@@ -38,6 +38,10 @@ matrix_root_dir: /opt/matrix
 docker_network_name: matrix-net
 docker_network_subnet: 172.23.0.0/24
 docker_network_gateway: 172.23.0.1
+docker_container_log_driver: local
+docker_container_log_options:
+  max-size: 20m
+  max-file: "5"
 
 # PostgreSQL
 postgresql_host_port: 5432
