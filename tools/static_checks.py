@@ -45,6 +45,7 @@ patterns = {
     r"ghcr\.io/etkecc/synapse-admin": "Old Synapse Admin image reintroduced",
     r"\blivekit_ws_port\b": "Removed LiveKit variable reintroduced",
     r"\belement_jwt_port\b": "Removed JWT variable reintroduced",
+    r":latest(?:[\"']|\s|$)": "Moving :latest image reference reintroduced",
 }
 
 for path in sorted((ROOT / "ansible").rglob("*")):
@@ -57,22 +58,6 @@ for path in sorted((ROOT / "ansible").rglob("*")):
     for pattern, message in patterns.items():
         if re.search(pattern, text):
             errors.append(f"{message}: {path.relative_to(ROOT)}")
-
-latest_refs: list[tuple[pathlib.Path, str]] = []
-for path in sorted((ROOT / "ansible").rglob("*")):
-    if not path.is_file():
-        continue
-    try:
-        text = path.read_text(encoding="utf-8-sig")
-    except UnicodeDecodeError:
-        continue
-    for line in text.splitlines():
-        if ":latest" in line:
-            latest_refs.append((path, line.strip()))
-
-if len(latest_refs) != 1 or "ghcr.io/etkecc/ketesa:latest" not in latest_refs[0][1]:
-    rendered = ", ".join(f"{p.relative_to(ROOT)}: {line}" for p, line in latest_refs) or "none"
-    errors.append(f"Unexpected :latest image references; Ketesa must be the only explicit exception: {rendered}")
 
 # Avoid the SIGPIPE false-negative class already observed with pipefail. Shell
 # code should capture producer output first, then grep a here-string/file.
