@@ -46,6 +46,10 @@ patterns = {
     r"\blivekit_ws_port\b": "Removed LiveKit variable reintroduced",
     r"\belement_jwt_port\b": "Removed JWT variable reintroduced",
     r":latest(?:[\"']|\s|$)": "Moving :latest image reference reintroduced",
+    r"ansible\.builtin\.apt_repository\b": "Deprecated apt_repository module reintroduced",
+    r"\bansible_(?:distribution|distribution_version|distribution_release|effective_user_id|memtotal_mb|processor_vcpus|processor_count|mounts|architecture|date_time)\b": (
+        "Deprecated top-level injected Ansible fact reintroduced; use ansible_facts[...]"
+    ),
 }
 
 for path in sorted((ROOT / "ansible").rglob("*")):
