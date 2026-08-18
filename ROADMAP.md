@@ -120,12 +120,14 @@ Before considering a release candidate complete:
 1. syntax/static checks;
 2. clean Ubuntu 24.04 deployment;
 3. second Ansible run with no unintended changes;
-4. reboot persistence test;
-5. Certbot dry-run with deploy hooks;
-6. incoming/outgoing federation checks;
-7. legacy TURN relay check;
-8. MatrixRTC local/federated audio+video calls including embedded TURN relay where possible;
-9. final verifier with zero mandatory failures.
+4. `check.sh` desired-state review on the installed host;
+5. reboot persistence test;
+6. Certbot dry-run with deploy hooks;
+7. incoming/outgoing federation checks;
+8. legacy TURN relay check;
+9. MatrixRTC local/federated audio+video calls including embedded TURN relay where possible;
+10. backup/destroy/restore rehearsal on a disposable host;
+11. final verifier with zero mandatory failures.
 
 ## Implementation status — `agent/roadmap-hardening`
 
@@ -133,11 +135,12 @@ Before considering a release candidate complete:
 
 - [x] Generic topology/subdomain model; no production domain/IP hard-coding in executable content.
 - [x] Pinned controller/collection versions and pinned service versions; Ketesa `latest` remains the single explicit exception.
-- [x] Interactive bootstrap/launcher with persisted topology and preflight.
-- [x] Direct-public/NAT distinction and active SSH-port detection.
+- [x] Interactive bootstrap/launcher with persisted topology, input validation and preflight.
+- [x] Direct-public/NAT distinction, exact local-IP checks and active SSH-session port detection.
 - [x] Explicit IPv6-disabled behavior with AAAA rejection.
 - [x] Deterministic PostgreSQL configuration, conservative tuning and major-version guard.
 - [x] Synapse policy/metrics/federation wiring and database-backed admin reconciliation.
+- [x] Partial-deploy recovery path with ephemeral `converge.sh --admin-password` secret handling.
 - [x] Element permalink correction and Ketesa migration.
 - [x] Production-proven LiveKit/JWT MatrixRTC security model and explicit embedded TURN relay range.
 - [x] Independent hardened legacy Coturn contour with NAT mapping support.
@@ -145,10 +148,12 @@ Before considering a release candidate complete:
 - [x] Desired-state UFW including stale public 7880 removal.
 - [x] Dedicated Fail2ban SSH baseline role with control-socket race handling.
 - [x] Production-proven parameterized verifier and optional deep Certbot renewal test.
-- [x] Bounded Docker container logging.
-- [x] `converge.sh`, `check.sh`, backup-first `upgrade.sh` and guarded `destroy.sh`.
-- [x] Protected backup format; destructive destroy requires a full backup including Synapse media.
+- [x] NAT-safe self-verification using loopback with correct Host/SNI rather than requiring hairpin NAT.
+- [x] Bounded Docker container logging and no Docker-group privilege for the Matrix service account.
+- [x] `converge.sh`, check-mode-aware `check.sh`, backup-first `upgrade.sh` and guarded `destroy.sh`.
+- [x] Protected backup format with root-only artifacts; destructive destroy requires a full backup including Synapse media.
 - [x] GitHub Actions static/YAML/shell/Ansible syntax gate.
+- [x] CI renders and shell-validates verifier variants with federation both on and off.
 - [x] Operator README and explicit restore runbook/contract.
 
 ### Deliberately deferred until integration testing
@@ -162,6 +167,7 @@ Before considering a release candidate complete:
 
 - [ ] Fresh Ubuntu 24.04 installation from `bootstrap.sh`.
 - [ ] Second `converge.sh` run with no unintended changes.
+- [ ] `check.sh` on the installed host; confirm useful diff/no runtime false failures.
 - [ ] Reboot and persistence verification.
 - [ ] `verify.sh --deep` / Certbot staging renewal on the clean-host deployment.
 - [ ] Incoming/outgoing federation checks when federation is enabled.
