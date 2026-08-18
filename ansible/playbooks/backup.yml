@@ -8,6 +8,7 @@
     matrix_backup_root: /var/backups/matrix-deploy
     matrix_backup_id: "{{ ansible_date_time.iso8601_basic_short }}"
     matrix_backup_dir: "{{ matrix_backup_root }}/{{ matrix_backup_id }}"
+    matrix_backup_include_media: false
     matrix_backup_candidates:
       - /etc/matrix-deploy
       - "{{ matrix_root_dir }}/.secrets"
@@ -47,10 +48,16 @@
         executable: /bin/bash
       changed_when: true
 
+    - name: Build backup candidate list
+      ansible.builtin.set_fact:
+        matrix_backup_candidate_paths: >-
+          {{ matrix_backup_candidates +
+             ([synapse_media_store] if matrix_backup_include_media | bool else []) }}
+
     - name: Check backup candidate paths
       ansible.builtin.stat:
         path: "{{ item }}"
-      loop: "{{ matrix_backup_candidates }}"
+      loop: "{{ matrix_backup_candidate_paths }}"
       register: matrix_backup_candidate_stats
 
     - name: Build existing backup path list
@@ -98,7 +105,7 @@
           server_name={{ matrix_domains.synapse }}
           public_ipv4={{ matrix_external_ip }}
           database={{ postgresql_synapse_db }}
-          media_store_included=false
+          media_store_included={{ matrix_backup_include_media | bool | lower }}
           postgres_data_directory_included=false
           restore_requires_explicit_operator_action=true
 
