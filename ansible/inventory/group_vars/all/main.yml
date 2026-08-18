@@ -27,7 +27,6 @@ matrix_domains:
 matrix_external_ip: ""
 matrix_ipv6_enabled: false
 matrix_ssh_port: 22
-matrix_timezone: Etc/UTC
 
 matrix_system_user: matrix
 matrix_system_group: matrix
@@ -90,12 +89,10 @@ synapse_user_directory_exclude_remote_users: false
 synapse_url_preview_enabled: true
 
 # Web applications
-
 element_web_root: "{{ matrix_root_dir }}/element-web"
 synad_root: "{{ matrix_root_dir }}/synad"
 element_call_root: "{{ matrix_root_dir }}/element-call"
 livekit_root: "{{ matrix_root_dir }}/livekit"
-element_jwt_root: "{{ matrix_root_dir }}/element-jwt"
 
 element_web_host_port: 8081
 synad_host_port: 8082
