@@ -63,6 +63,94 @@ for path in sorted((ROOT / "ansible").rglob("*")):
         if re.search(pattern, text):
             errors.append(f"{message}: {path.relative_to(ROOT)}")
 
+# Version policy must describe upstream sources only. Exact application tags are
+# runtime state resolved by preflight into /etc/matrix-deploy/versions.yml; they
+# must not creep back into the repository as top-level *_image pins.
+versions_path = ROOT / "ansible/inventory/group_vars/all/versions.yml"
+try:
+    version_policy = yaml.safe_load(versions_path.read_text(encoding="utf-8")) or {}
+except Exception as exc:  # noqa: BLE001
+    errors.append(f"Cannot parse version policy: {exc}")
+    version_policy = {}
+
+if isinstance(version_policy, dict):
+    hardcoded_image_keys = sorted(
+        key for key in version_policy
+        if isinstance(key, str) and key.endswith("_image")
+    )
+    if hardcoded_image_keys:
+        errors.append(
+            "Hardcoded top-level application image pins reintroduced in versions.yml: "
+            + ", ".join(hardcoded_image_keys)
+        )
+
+    if version_policy.get("matrix_version_lock_file") != "/etc/matrix-deploy/versions.yml":
+        errors.append("matrix_version_lock_file must remain /etc/matrix-deploy/versions.yml")
+
+    postgresql_major = str(version_policy.get("postgresql_major", ""))
+    if not re.fullmatch(r"\d+", postgresql_major):
+        errors.append(f"Invalid postgresql_major in version policy: {postgresql_major!r}")
+
+    sources = version_policy.get("matrix_version_sources")
+    required_sources = {
+        "postgresql",
+        "synapse",
+        "element_web",
+        "element_call",
+        "livekit",
+        "element_jwt",
+        "synad",
+    }
+    if not isinstance(sources, dict):
+        errors.append("matrix_version_sources must be a mapping")
+    else:
+        actual_sources = set(sources)
+        if actual_sources != required_sources:
+            errors.append(
+                "matrix_version_sources mismatch: "
+                f"expected={sorted(required_sources)} actual={sorted(actual_sources)}"
+            )
+
+        output_vars: set[str] = set()
+        for name, raw_source in sources.items():
+            if not isinstance(raw_source, dict):
+                errors.append(f"Version source {name!r} must be a mapping")
+                continue
+
+            image = str(raw_source.get("image", "")).strip()
+            if not image:
+                errors.append(f"Version source {name!r} is missing image repository")
+            else:
+                last_component = image.rsplit("/", 1)[-1]
+                if ":" in last_component or "@" in image:
+                    errors.append(
+                        f"Version source {name!r} must contain an untagged image repository: {image!r}"
+                    )
+
+            output_var = str(raw_source.get("output_image_var", "")).strip()
+            if not output_var.endswith("_image"):
+                errors.append(
+                    f"Version source {name!r} has invalid output_image_var: {output_var!r}"
+                )
+            elif output_var in output_vars:
+                errors.append(f"Duplicate output_image_var in version policy: {output_var}")
+            else:
+                output_vars.add(output_var)
+
+            resolver = str(raw_source.get("resolver", ""))
+            if resolver not in {"github_release", "postgresql_dockerhub"}:
+                errors.append(f"Unsupported resolver in version policy for {name!r}: {resolver!r}")
+
+            if resolver == "github_release":
+                if not raw_source.get("github_repo"):
+                    errors.append(f"Version source {name!r} is missing github_repo")
+                if raw_source.get("tag_transform") not in {"identity", "strip_v"}:
+                    errors.append(f"Version source {name!r} has invalid tag_transform")
+                if not raw_source.get("release_regex"):
+                    errors.append(f"Version source {name!r} is missing stable release_regex")
+else:
+    errors.append("Version policy YAML root must be a mapping")
+
 # Avoid the SIGPIPE false-negative class already observed with pipefail. Shell
 # code should capture producer output first, then grep a here-string/file.
 for path in sorted(ROOT.rglob("*")):
