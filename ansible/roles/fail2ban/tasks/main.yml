@@ -28,6 +28,7 @@
 - name: Validate Fail2ban configuration
   ansible.builtin.command: fail2ban-client -t
   changed_when: false
+  when: not ansible_check_mode
 
 - name: Enable and start Fail2ban
   ansible.builtin.systemd:
@@ -46,13 +47,16 @@
     path: /run/fail2ban/fail2ban.sock
     state: present
     timeout: 15
+  when: not ansible_check_mode
 
 - name: Verify Fail2ban daemon responds
   ansible.builtin.command: fail2ban-client ping
   register: fail2ban_ping
   changed_when: false
   failed_when: "'Server replied: pong' not in fail2ban_ping.stdout"
+  when: not ansible_check_mode
 
 - name: Verify SSH jail is active
   ansible.builtin.command: fail2ban-client status sshd
   changed_when: false
+  when: not ansible_check_mode
