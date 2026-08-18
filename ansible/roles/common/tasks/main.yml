@@ -16,7 +16,6 @@
       - python3-venv
       - python3-psycopg2
       - python3-debian
-      - software-properties-common
       - acl
       - openssl
 
