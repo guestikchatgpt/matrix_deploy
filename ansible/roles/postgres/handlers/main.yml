@@ -1,5 +1,6 @@
 ---
-- name: Reload PostgreSQL
-  ansible.builtin.service:
-    name: "{{ postgresql_service_name }}"
-    state: reloaded
+- name: Restart PostgreSQL container
+  community.docker.docker_container:
+    name: postgres
+    restart: true
+    state: started

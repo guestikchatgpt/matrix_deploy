@@ -1,16 +1,19 @@
-# Managed by Ansible
-listen_addresses = '{{ postgresql_listen_address }}'
+# Managed by Ansible - Matrix Deploy
+listen_addresses = '*'
 password_encryption = 'scram-sha-256'
-max_connections = {{ postgresql_tuning.max_connections }}
-shared_buffers = '{{ postgresql_tuning.shared_buffers_mb }}MB'
-effective_cache_size = '{{ postgresql_tuning.effective_cache_size_mb }}MB'
-maintenance_work_mem = '{{ postgresql_tuning.maintenance_work_mem_mb }}MB'
-work_mem = '{{ postgresql_tuning.work_mem_mb }}MB'
+
+max_connections = {{ postgresql_effective_tuning.max_connections }}
+shared_buffers = '{{ postgresql_effective_tuning.shared_buffers_mb }}MB'
+effective_cache_size = '{{ postgresql_effective_tuning.effective_cache_size_mb }}MB'
+maintenance_work_mem = '{{ postgresql_effective_tuning.maintenance_work_mem_mb }}MB'
+autovacuum_work_mem = '{{ postgresql_effective_tuning.autovacuum_work_mem_mb }}MB'
+work_mem = '{{ postgresql_effective_tuning.work_mem_mb }}MB'
+
 wal_level = 'replica'
-max_wal_size = '2GB'
-min_wal_size = '512MB'
-max_worker_processes = 16
-max_parallel_workers_per_gather = 4
-max_parallel_workers = 16
-max_parallel_maintenance_workers = 4
-shared_preload_libraries = 'pg_stat_statements'
+max_wal_size = '{{ postgresql_effective_tuning.max_wal_size }}'
+min_wal_size = '{{ postgresql_effective_tuning.min_wal_size }}'
+
+max_worker_processes = {{ [postgresql_effective_tuning.max_parallel_workers | int, 4] | max }}
+max_parallel_workers = {{ postgresql_effective_tuning.max_parallel_workers }}
+max_parallel_workers_per_gather = {{ postgresql_effective_tuning.max_parallel_workers_per_gather }}
+max_parallel_maintenance_workers = {{ postgresql_effective_tuning.max_parallel_maintenance_workers }}
