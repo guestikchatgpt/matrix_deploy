@@ -1,43 +1,68 @@
 ---
-# Defaults - most values get overridden through vars_prompt at runtime
+# Matrix deployment topology and operator-adjustable defaults.
+# Container/application versions live in versions.yml.
 
 matrix_base_domain: example.com
+
+# Hostname prefixes are deliberately configurable. The production reference
+# used m.<domain>, while the original baseline used matrix.<domain>.
+matrix_subdomains:
+  synapse: matrix
+  element: element
+  admin: synad
+  turn: turn
+  livekit: rtc
+  element_call: call
+
 matrix_domains:
-  synapse: "matrix.{{ matrix_base_domain }}"
-  element: "element.{{ matrix_base_domain }}"
-  admin: "synad.{{ matrix_base_domain }}"
-  turn: "turn.{{ matrix_base_domain }}"
-  livekit: "rtc.{{ matrix_base_domain }}"
-  element_call: "call.{{ matrix_base_domain }}"
+  synapse: "{{ matrix_subdomains.synapse }}.{{ matrix_base_domain }}"
+  element: "{{ matrix_subdomains.element }}.{{ matrix_base_domain }}"
+  admin: "{{ matrix_subdomains.admin }}.{{ matrix_base_domain }}"
+  turn: "{{ matrix_subdomains.turn }}.{{ matrix_base_domain }}"
+  livekit: "{{ matrix_subdomains.livekit }}.{{ matrix_base_domain }}"
+  element_call: "{{ matrix_subdomains.element_call }}.{{ matrix_base_domain }}"
 
+# Empty means: detect during preflight/bootstrap and require an operator-safe
+# result before any public-facing configuration is applied.
 matrix_external_ip: ""
-
+matrix_ipv6_enabled: false
+matrix_ssh_port: 22
 matrix_timezone: Etc/UTC
 
 matrix_system_user: matrix
 matrix_system_group: matrix
 matrix_root_dir: /opt/matrix
 
-postgresql_version: "18"
-postgresql_image: "postgres:18"
+# Docker network used by containerised services. LiveKit intentionally uses
+# host networking for RTC/TURN and is not attached to this bridge.
+docker_network_name: matrix-net
+docker_network_subnet: 172.23.0.0/24
+docker_network_gateway: 172.23.0.1
+
+# PostgreSQL
 postgresql_host_port: 5432
-postgresql_connect_host: "postgres"
+postgresql_connect_host: postgres
 postgresql_synapse_db: synapse
 postgresql_synapse_user: synapse
 postgresql_synapse_password_length: 48
+postgresql_data_dir: "{{ matrix_root_dir }}/postgres/data"
 
-postgresql_conf_path: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
-postgresql_hba_path: "/etc/postgresql/{{ postgresql_version }}/main/pg_hba.conf"
-postgresql_service_name: postgresql
-
+# Conservative baseline. The postgres role will derive/validate the final
+# resource-aware values; these are intentionally not the old aggressive model.
 postgresql_tuning:
-  shared_buffers_mb: 0  # Auto-calculated
-  effective_cache_size_mb: 0
-  maintenance_work_mem_mb: 512
-  work_mem_mb: 0
-  max_connections: 400
+  shared_buffers_mb: 1024
+  effective_cache_size_mb: 4096
+  maintenance_work_mem_mb: 256
+  autovacuum_work_mem_mb: 128
+  work_mem_mb: 16
+  max_connections: 100
+  max_wal_size: 2GB
+  min_wal_size: 512MB
+  max_parallel_workers: 2
+  max_parallel_workers_per_gather: 1
+  max_parallel_maintenance_workers: 1
 
-synapse_image: "matrixdotorg/synapse:latest"
+# Synapse
 synapse_container_name: synapse
 synapse_uid: 991
 synapse_gid: 991
@@ -48,20 +73,19 @@ synapse_media_store: "{{ synapse_data_dir }}/media"
 synapse_registration_shared_secret_len: 48
 synapse_macaroon_secret_len: 48
 synapse_form_secret_len: 48
-synapse_report_stats: true
 
+synapse_registration_enabled: false
+synapse_report_stats: true
 synapse_enable_metrics: true
 synapse_enable_federation: true
+synapse_use_presence: true
+synapse_enable_search: true
+synapse_user_directory_search_all_users: true
+synapse_user_directory_prefer_local_users: true
+synapse_user_directory_exclude_remote_users: false
+synapse_url_preview_enabled: true
 
-docker_network_name: matrix-net
-docker_network_subnet: 172.23.0.0/24
-docker_network_gateway: 172.23.0.1
-
-element_web_image: "vectorim/element-web:latest"
-element_call_image: "ghcr.io/element-hq/element-call:latest"
-synad_image: "ghcr.io/etkecc/synapse-admin:latest"
-livekit_image: "livekit/livekit-server:latest"
-livekit_config_path: "{{ livekit_root }}/livekit.yaml"
+# Web applications
 
 element_web_root: "{{ matrix_root_dir }}/element-web"
 synad_root: "{{ matrix_root_dir }}/synad"
@@ -72,28 +96,31 @@ element_jwt_root: "{{ matrix_root_dir }}/element-jwt"
 element_web_host_port: 8081
 synad_host_port: 8082
 element_call_host_port: 8083
-element_jwt_port: 8084
+element_jwt_host_port: 8084
 
+# LiveKit / MatrixRTC
+livekit_config_path: "{{ livekit_root }}/livekit.yaml"
+livekit_cert_dir: "{{ livekit_root }}/certs"
 livekit_http_port: 7880
-livekit_ws_port: 7880
 livekit_rtc_tcp_port: 7881
 livekit_turn_udp_port: 3480
 livekit_turn_tls_port: 5449
 livekit_port_range_start: 62000
 livekit_port_range_end: 62999
+livekit_turn_relay_range_start: 63000
+livekit_turn_relay_range_end: 63999
+livekit_room_auto_create: false
 
-element_jwt_image: "ghcr.io/element-hq/lk-jwt-service:0.3.0"
+element_jwt_bind: ":8080"
 element_jwt_full_access_homeservers:
   - "{{ matrix_domains.synapse }}"
   - "{{ matrix_base_domain }}"
 
+# Nginx / ACME
 nginx_sites_root: /var/www/matrix
 nginx_well_known_dir: "{{ nginx_sites_root }}/.well-known/matrix"
 
-coturn_realms:
-  - "{{ matrix_domains.turn }}"
-  - "{{ matrix_domains.synapse }}"
-
+# Legacy system Coturn. This is intentionally independent from LiveKit TURN.
 coturn_min_port: 57000
 coturn_max_port: 57999
 coturn_tls_port: 5349
@@ -101,18 +128,8 @@ coturn_udp_port: 3478
 coturn_cert_path: /etc/turnserver/certs/fullchain.pem
 coturn_key_path: /etc/turnserver/certs/privkey.pem
 
-firewall_open_tcp:
-  - 22
-  - 80
-  - 443
-  - 8448
-firewall_open_udp:
-  - "{{ coturn_udp_port }}"
-  - "{{ coturn_tls_port }}"
-  - "{{ livekit_turn_udp_port }}"
-livekit_ports_tcp:
-  - "{{ livekit_http_port }}"
-  - "{{ livekit_ws_port }}"
-  - "{{ livekit_tls_port }}"
-livekit_ports_udp:
-  - "{{ livekit_udp_port }}"
+# direct_public: public IPv4 is assigned to the host itself.
+# nat: a private relay/listening address maps to matrix_external_ip.
+# auto: preflight/bootstrap must resolve the mode before deployment.
+coturn_network_mode: auto
+coturn_relay_ip: ""

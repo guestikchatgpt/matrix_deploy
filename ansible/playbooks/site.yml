@@ -1,4 +1,4 @@
-﻿---
+---
 - name: Deploy Matrix Synapse stack
   hosts: matrix_hosts
   become: true
@@ -18,19 +18,8 @@
 
   vars:
     matrix_admin_user: admin
-    matrix_registration_enabled: false
 
   pre_tasks:
-    - name: Обновить карту поддоменов
-      set_fact:
-        matrix_domains:
-          synapse: "matrix.{{ matrix_base_domain }}"
-          element: "element.{{ matrix_base_domain }}"
-          admin: "synad.{{ matrix_base_domain }}"
-          turn: "turn.{{ matrix_base_domain }}"
-          livekit: "rtc.{{ matrix_base_domain }}"
-          element_call: "call.{{ matrix_base_domain }}"
-
     - name: Определить внешний IP через ipify
       uri:
         url: https://api.ipify.org
@@ -56,7 +45,6 @@
       set_fact:
         livekit_api_key: "{{ lookup('password', matrix_root_dir + '/.secrets/livekit_api_key length=20 chars=ascii_uppercase,digits') }}"
         livekit_api_secret: "{{ lookup('password', matrix_root_dir + '/.secrets/livekit_api_secret length=64 chars=ascii_letters,digits') }}"
-        livekit_turn_secret: "{{ lookup('password', matrix_root_dir + '/.secrets/livekit_turn_secret length=48 chars=ascii_letters,digits') }}"
       no_log: true
 
   roles:
