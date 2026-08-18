@@ -83,6 +83,49 @@ jobs:
             bash -n "$script"
           done
 
+      - name: Exercise bootstrap preparation on Ubuntu 24.04
+        shell: bash
+        run: sudo ./bootstrap.sh --prepare-only
+
+      - name: Exercise NAT preflight runtime on a fresh runner
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          relay_ip="$(ip -4 route get 1.1.1.1 | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+          test -n "$relay_ip"
+
+          public_ip='8.8.8.8'
+          base_domain='matrix-ci.invalid'
+          for host in \
+            "matrix.${base_domain}" \
+            "element.${base_domain}" \
+            "synad.${base_domain}" \
+            "call.${base_domain}" \
+            "rtc.${base_domain}" \
+            "turn.${base_domain}"
+          do
+            printf '%s %s\n' "$public_ip" "$host" | sudo tee -a /etc/hosts >/dev/null
+          done
+
+          cat > /tmp/matrix-ci-preflight.yml <<EOF
+          ---
+          matrix_base_domain: "${base_domain}"
+          matrix_external_ip: "${public_ip}"
+          certbot_email: "ci@example.invalid"
+          matrix_ssh_port: 22
+          matrix_ipv6_enabled: false
+          synapse_enable_federation: true
+          coturn_network_mode: "nat"
+          coturn_relay_ip: "${relay_ip}"
+          EOF
+
+          (
+            cd ansible
+            sudo ../.venv/bin/ansible-playbook playbooks/preflight.yml \
+              --extra-vars '@/tmp/matrix-ci-preflight.yml'
+          )
+
       - name: Show Ansible versions
         working-directory: ansible
         run: |
