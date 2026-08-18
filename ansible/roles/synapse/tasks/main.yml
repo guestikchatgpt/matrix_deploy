@@ -77,6 +77,7 @@
   retries: 20
   delay: 3
   until: synapse_up.status | default(0) == 200
+  when: not ansible_check_mode
 
 - name: Read Matrix admin state from Synapse database
   community.docker.docker_container_exec:
@@ -94,6 +95,7 @@
   register: synapse_admin_db_state
   changed_when: false
   no_log: true
+  when: not ansible_check_mode
 
 - name: Refuse to silently promote an existing non-admin Matrix user
   ansible.builtin.assert:
@@ -103,6 +105,7 @@
       @{{ matrix_admin_user }}:{{ matrix_domains.synapse }} already exists but is
       not an administrator. Refusing to change privileges implicitly.
   no_log: true
+  when: not ansible_check_mode
 
 - name: Require admin password only for initial admin creation
   ansible.builtin.assert:
@@ -111,7 +114,9 @@
     fail_msg: >-
       Matrix admin does not exist yet. Supply matrix_admin_password for the
       initial deployment; later converges do not require the password.
-  when: synapse_admin_db_state.stdout | trim == '-1'
+  when:
+    - not ansible_check_mode
+    - synapse_admin_db_state.stdout | trim == '-1'
   no_log: true
 
 - name: Create Synapse admin user when it does not exist
@@ -127,7 +132,9 @@
       - "{{ matrix_admin_password | default('') }}"
       - --admin
       - http://localhost:8008
-  when: synapse_admin_db_state.stdout | trim == '-1'
+  when:
+    - not ansible_check_mode
+    - synapse_admin_db_state.stdout | trim == '-1'
   register: synapse_admin_create
   changed_when: true
   no_log: true
@@ -148,6 +155,7 @@
   register: synapse_admin_db_verify
   changed_when: false
   no_log: true
+  when: not ansible_check_mode
 
 - name: Require configured Matrix admin to exist and be administrator
   ansible.builtin.assert:
@@ -155,3 +163,4 @@
       - synapse_admin_db_verify.stdout | trim == '1'
     fail_msg: 'Matrix admin reconciliation failed.'
   no_log: true
+  when: not ansible_check_mode
