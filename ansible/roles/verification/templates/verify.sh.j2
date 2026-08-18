@@ -1,93 +1,307 @@
 #!/bin/bash
 set -u
+set -o pipefail
 
-LOG_DIR="/var/log"
-LOG_FILE="$LOG_DIR/matrix-stack-verify.log"
-mkdir -p "$LOG_DIR"
+PASS=0
+WARN=0
+FAIL=0
 
-exec > >(tee -a "$LOG_FILE") 2>&1
-
-GREEN="\e[32m"
-RED="\e[31m"
-YELLOW="\e[33m"
-RESET="\e[0m"
-
-TARGET_IP="{{ matrix_external_ip | default(ansible_default_ipv4.address, true) }}"
-STATUS=0
-
-print_banner() {
-  echo -e "${YELLOW}================ Проверка Matrix стека ================${RESET}"
-  echo "Время: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-  echo "Целевой IP: $TARGET_IP"
-  echo ""
-}
-
-report() {
-  local label="$1"
-  local code=$2
-  if [ $code -eq 0 ]; then
-    echo -e "[${GREEN}  OK  ${RESET}] $label"
-  else
-    echo -e "[${RED}FAIL${RESET}] $label"
-    STATUS=1
-  fi
-}
-
-run_check() {
-  local label="$1"
-  shift
-  "$@"
-  report "$label" $?
-}
-
-curl_check() {
-  local label="$1"
-  local domain="$2"
-  local path="$3"
-  local opts="--resolve ${domain}:443:$TARGET_IP --silent --show-error --location --fail --max-time 15 --output /dev/null"
-  run_check "$label" bash -c "curl $opts https://${domain}${path}"
-}
-
-print_banner
-
-run_check "Порт 443 (nginx HTTPS)" bash -c "ss -tln | grep -q ':443 '"
-run_check "Порт 8448 (nginx federation)" bash -c "ss -tln | grep -q ':8448 '"
-run_check "Порт 5349 (coturn TLS)" bash -c "ss -tln | grep -q ':5349 '"
-run_check "Порт {{ livekit_ws_port }} (LiveKit WS)" bash -c "ss -tln | grep -q ':{{ livekit_ws_port }} '"
-
-run_check "Сервис docker активен" systemctl is-active --quiet docker
-run_check "Сервис nginx активен" systemctl is-active --quiet nginx
-run_check "Сервис coturn активен" systemctl is-active --quiet coturn
-
-containers=(synapse element-web element-call synad element-jwt livekit)
-for c in "${containers[@]}"; do
-  run_check "Контейнер $c запущен" bash -c "docker ps --format '{% raw %}{{.Names}}{% endraw %}' | grep -Fxq '$c'"
-done
-
-run_check "Synapse API (localhost)" curl -sf http://127.0.0.1:8008/_matrix/client/versions > /dev/null
-run_check "Element JWT (localhost)" curl -sf http://127.0.0.1:{{ element_jwt_port }}/healthz > /dev/null
-
-curl_check "Synapse API /_matrix/client/versions" "{{ matrix_domains.synapse }}" "/_matrix/client/versions"
-curl_check "Element Web доступен" "{{ matrix_domains.element }}" "/"
-curl_check "Synapse Admin (Synad) доступен" "{{ matrix_domains.admin }}" "/"
-curl_check "Element Call доступен" "{{ matrix_domains.element_call }}" "/"
-curl_check "LiveKit JWT HTTPS" "{{ matrix_domains.livekit }}" "/livekit/jwt/healthz"
-
-if [ $STATUS -eq 0 ]; then
-  echo -e "${GREEN}Все проверки пройдены успешно.${RESET}"
+if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ -n "${TERM:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
+    GREEN="$(tput setaf 2)"
+    YELLOW="$(tput setaf 3)"
+    RED="$(tput setaf 1)"
+    BOLD="$(tput bold)"
+    RESET="$(tput sgr0)"
 else
-  echo -e "${RED}Некоторые проверки провалены. См. лог для деталей.${RESET}"
+    GREEN=''
+    YELLOW=''
+    RED=''
+    BOLD=''
+    RESET=''
 fi
 
-echo ""
-echo "Ссылки на сервисы:"
-echo " - Synapse:       https://{{ matrix_domains.synapse }}/"
-echo " - Element Web:   https://{{ matrix_domains.element }}/"
-echo " - Synapse Admin: https://{{ matrix_domains.admin }}/"
-echo " - Element Call:  https://{{ matrix_domains.element_call }}/"
-echo " - LiveKit JWT:   https://{{ matrix_domains.livekit }}/livekit/jwt/healthz"
-echo " - TURN URI:      turn:{{ matrix_domains.turn }}:3478?transport=udp"
+ok() {
+    printf '  %s[ OK ]%s %s\n' "$GREEN" "$RESET" "$*"
+    PASS=$((PASS + 1))
+}
 
-echo -e "Лог лежит в: $LOG_FILE"
+warn() {
+    printf '  %s[WARN]%s %s\n' "$YELLOW" "$RESET" "$*"
+    WARN=$((WARN + 1))
+}
 
-exit $STATUS
+fail() {
+    printf '  %s[FAIL]%s %s\n' "$RED" "$RESET" "$*"
+    FAIL=$((FAIL + 1))
+}
+
+section() {
+    printf '\n%s== %s ==%s\n' "$BOLD" "$*" "$RESET"
+}
+
+service_check() {
+    local name="$1"
+    if systemctl is-active --quiet "$name"; then
+        ok "systemd: $name active"
+    else
+        fail "systemd: $name inactive"
+    fi
+}
+
+container_check() {
+    local name="$1"
+    local state
+    state="$(docker inspect "$name" --format '{% raw %}{{.State.Status}}{% endraw %}' 2>/dev/null)" || state='missing'
+    if [ "$state" = 'running' ]; then
+        ok "container: $name running"
+    else
+        fail "container: $name state=$state"
+    fi
+}
+
+http_check() {
+    local label="$1"
+    local url="$2"
+    if curl -4fsS --max-time 10 "$url" >/dev/null 2>&1; then
+        ok "$label"
+    else
+        fail "$label"
+    fi
+}
+
+listener_check() {
+    local label="$1"
+    local port="$2"
+    if grep -Eq ":${port}[[:space:]]" <<<"$SOCKETS"; then
+        ok "$label"
+    else
+        fail "$label"
+    fi
+}
+
+ufw_rule_check() {
+    local label="$1"
+    local needle="$2"
+    if grep -Fq "$needle" <<<"$UFW_STATUS"; then
+        ok "$label"
+    else
+        fail "$label"
+    fi
+}
+
+TARGET_IP="{{ matrix_external_ip }}"
+SOCKETS="$(ss -lntup 2>/dev/null || true)"
+UFW_STATUS="$(ufw status 2>/dev/null || true)"
+
+printf '%s====================================================%s\n' "$YELLOW" "$RESET"
+printf '%s              Проверка Matrix стека%s\n' "$BOLD" "$RESET"
+printf '%s====================================================%s\n' "$YELLOW" "$RESET"
+printf 'Время:      %s UTC\n' "$(date -u '+%F %T')"
+printf 'Целевой IP: %s\n' "$TARGET_IP"
+
+section 'Системные сервисы'
+for svc in docker nginx coturn fail2ban; do
+    service_check "$svc"
+done
+
+section 'Docker-контейнеры'
+for c in postgres synapse element-web synad element-call element-jwt livekit; do
+    container_check "$c"
+done
+
+section 'Сетевые listeners'
+listener_check 'nginx HTTP :80' 80
+listener_check 'nginx HTTPS :443' 443
+{% if synapse_enable_federation | bool %}
+listener_check 'nginx federation :8448' 8448
+{% else %}
+if grep -Eq ':8448[[:space:]]' <<<"$SOCKETS"; then
+    fail 'federation disabled, but :8448 is listening'
+else
+    ok 'federation disabled and :8448 is not listening'
+fi
+{% endif %}
+listener_check 'legacy Coturn :{{ coturn_udp_port }}' {{ coturn_udp_port }}
+listener_check 'legacy Coturn TLS :{{ coturn_tls_port }}' {{ coturn_tls_port }}
+listener_check 'LiveKit TURN/UDP :{{ livekit_turn_udp_port }}' {{ livekit_turn_udp_port }}
+listener_check 'LiveKit TURN/TLS :{{ livekit_turn_tls_port }}' {{ livekit_turn_tls_port }}
+listener_check 'LiveKit RTC/TCP :{{ livekit_rtc_tcp_port }}' {{ livekit_rtc_tcp_port }}
+listener_check 'LiveKit API :{{ livekit_http_port }} локально слушает' {{ livekit_http_port }}
+
+section 'UFW'
+if grep -q '^Status: active' <<<"$UFW_STATUS"; then
+    ok 'UFW active'
+else
+    fail 'UFW inactive'
+fi
+ufw_rule_check '{{ matrix_ssh_port }}/tcp SSH allowed' '{{ matrix_ssh_port }}/tcp'
+ufw_rule_check '80/tcp allowed' '80/tcp'
+ufw_rule_check '443/tcp allowed' '443/tcp'
+{% if synapse_enable_federation | bool %}
+ufw_rule_check '8448/tcp allowed' '8448/tcp'
+{% else %}
+if grep -Eq '8448/tcp[[:space:]]+ALLOW' <<<"$UFW_STATUS"; then
+    fail '8448/tcp allowed while federation is disabled'
+else
+    ok '8448/tcp not allowed while federation is disabled'
+fi
+{% endif %}
+ufw_rule_check 'legacy TURN {{ coturn_udp_port }}/tcp allowed' '{{ coturn_udp_port }}/tcp'
+ufw_rule_check 'legacy TURN {{ coturn_udp_port }}/udp allowed' '{{ coturn_udp_port }}/udp'
+ufw_rule_check 'legacy TURN TLS {{ coturn_tls_port }}/tcp allowed' '{{ coturn_tls_port }}/tcp'
+ufw_rule_check 'legacy TURN relay {{ coturn_min_port }}:{{ coturn_max_port }}/udp allowed' '{{ coturn_min_port }}:{{ coturn_max_port }}/udp'
+ufw_rule_check 'LiveKit TURN {{ livekit_turn_udp_port }}/udp allowed' '{{ livekit_turn_udp_port }}/udp'
+ufw_rule_check 'LiveKit TURN/TLS {{ livekit_turn_tls_port }}/tcp allowed' '{{ livekit_turn_tls_port }}/tcp'
+ufw_rule_check 'LiveKit RTC {{ livekit_rtc_tcp_port }}/tcp allowed' '{{ livekit_rtc_tcp_port }}/tcp'
+ufw_rule_check 'LiveKit ICE {{ livekit_port_range_start }}:{{ livekit_port_range_end }}/udp allowed' '{{ livekit_port_range_start }}:{{ livekit_port_range_end }}/udp'
+ufw_rule_check 'LiveKit TURN relay {{ livekit_turn_relay_range_start }}:{{ livekit_turn_relay_range_end }}/udp allowed' '{{ livekit_turn_relay_range_start }}:{{ livekit_turn_relay_range_end }}/udp'
+if grep -Eq '{{ livekit_http_port }}/tcp[[:space:]]+ALLOW' <<<"$UFW_STATUS"; then
+    fail '{{ livekit_http_port }}/tcp publicly allowed in UFW'
+else
+    ok '{{ livekit_http_port }}/tcp NOT publicly allowed'
+fi
+
+section 'PostgreSQL / Synapse'
+if docker exec postgres pg_isready -U '{{ postgresql_synapse_user }}' -d '{{ postgresql_synapse_db }}' >/dev/null 2>&1; then
+    ok 'PostgreSQL pg_isready'
+else
+    fail 'PostgreSQL pg_isready'
+fi
+http_check 'Synapse client API' 'https://{{ matrix_domains.synapse }}/_matrix/client/versions'
+{% if synapse_enable_federation | bool %}
+http_check 'Synapse federation API :8448' 'https://{{ matrix_domains.synapse }}:8448/_matrix/federation/v1/version'
+{% endif %}
+if curl -fsS --max-time 5 http://127.0.0.1:8008/_synapse/metrics >/dev/null 2>&1; then
+    ok 'Synapse metrics доступны локально'
+else
+    fail 'Synapse metrics недоступны локально'
+fi
+PUBLIC_METRICS="$(curl -4sk --max-time 10 -o /dev/null -w '%{http_code}' https://{{ matrix_domains.synapse }}/_synapse/metrics)"
+if [ "$PUBLIC_METRICS" = '404' ]; then
+    ok 'Synapse metrics закрыты снаружи'
+else
+    fail "Synapse metrics снаружи: HTTP $PUBLIC_METRICS"
+fi
+
+section 'Web-приложения'
+http_check 'Element Web' 'https://{{ matrix_domains.element }}/'
+http_check 'Ketesa / Synapse Admin' 'https://{{ matrix_domains.admin }}/'
+http_check 'Element Call' 'https://{{ matrix_domains.element_call }}/'
+http_check 'LiveKit HTTPS frontend' 'https://{{ matrix_domains.livekit }}/'
+http_check 'LiveKit JWT health' 'https://{{ matrix_domains.livekit }}/livekit/jwt/healthz'
+
+section 'MatrixRTC discovery'
+if curl -4fsS --max-time 10 https://{{ matrix_domains.synapse }}/.well-known/matrix/client | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert d["m.homeserver"]["base_url"] == "https://{{ matrix_domains.synapse }}"
+foci = d.get("org.matrix.msc4143.rtc_foci", [])
+assert any(x.get("type") == "livekit" and x.get("livekit_service_url") == "https://{{ matrix_domains.livekit }}/livekit/jwt" for x in foci)
+' >/dev/null 2>&1; then
+    ok 'MatrixRTC discovery корректен'
+else
+    fail 'MatrixRTC discovery некорректен'
+fi
+
+section 'LiveKit configuration'
+if grep -Eq '^[[:space:]]*auto_create:[[:space:]]*false' '{{ livekit_config_path }}'; then
+    ok 'room.auto_create=false'
+else
+    fail 'room.auto_create != false'
+fi
+if grep -Eq '^[[:space:]]*relay_range_start:[[:space:]]*{{ livekit_turn_relay_range_start }}' '{{ livekit_config_path }}' && \
+   grep -Eq '^[[:space:]]*relay_range_end:[[:space:]]*{{ livekit_turn_relay_range_end }}' '{{ livekit_config_path }}'; then
+    ok 'embedded TURN relay = {{ livekit_turn_relay_range_start }}-{{ livekit_turn_relay_range_end }}'
+else
+    fail 'embedded TURN relay range некорректен'
+fi
+if curl -fsS --max-time 5 http://127.0.0.1:{{ livekit_http_port }}/ >/dev/null 2>&1; then
+    ok 'LiveKit API доступен локально :{{ livekit_http_port }}'
+else
+    fail 'LiveKit API недоступен локально :{{ livekit_http_port }}'
+fi
+
+section 'TLS'
+LIVEKIT_TLS="$(timeout 10 openssl s_client -connect {{ matrix_domains.livekit }}:{{ livekit_turn_tls_port }} -servername {{ matrix_domains.livekit }} -verify_return_error </dev/null 2>&1 || true)"
+if grep -q 'Verify return code: 0' <<<"$LIVEKIT_TLS"; then
+    ok 'LiveKit TURN/TLS :{{ livekit_turn_tls_port }} certificate'
+else
+    fail 'LiveKit TURN/TLS :{{ livekit_turn_tls_port }} certificate'
+fi
+COTURN_TLS="$(timeout 10 openssl s_client -connect {{ matrix_domains.turn }}:{{ coturn_tls_port }} -servername {{ matrix_domains.turn }} -verify_return_error </dev/null 2>&1 || true)"
+if grep -q 'Verify return code: 0' <<<"$COTURN_TLS"; then
+    ok 'legacy Coturn TLS :{{ coturn_tls_port }} certificate'
+else
+    fail 'legacy Coturn TLS :{{ coturn_tls_port }} certificate'
+fi
+if openssl x509 -checkend 2592000 -noout -in '/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem' >/dev/null 2>&1; then
+    ok 'Matrix SAN certificate >30 days'
+else
+    fail 'Matrix SAN certificate expires within 30 days'
+fi
+if openssl x509 -checkend 2592000 -noout -in '/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem' >/dev/null 2>&1; then
+    ok 'TURN certificate >30 days'
+else
+    fail 'TURN certificate expires within 30 days'
+fi
+MATRIX_CERT="$(sha256sum '/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem' | awk '{print $1}')"
+LIVEKIT_CERT="$(sha256sum '{{ livekit_cert_dir }}/turn.crt' | awk '{print $1}')"
+if [ "$MATRIX_CERT" = "$LIVEKIT_CERT" ]; then
+    ok 'LiveKit cert copy соответствует LE lineage'
+else
+    fail 'LiveKit cert copy НЕ соответствует LE lineage'
+fi
+TURN_CERT="$(sha256sum '/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem' | awk '{print $1}')"
+COTURN_CERT="$(sha256sum '{{ coturn_cert_path }}' | awk '{print $1}')"
+if [ "$TURN_CERT" = "$COTURN_CERT" ]; then
+    ok 'Coturn cert copy соответствует LE lineage'
+else
+    fail 'Coturn cert copy НЕ соответствует LE lineage'
+fi
+
+section 'Certbot / ACME'
+if systemctl is-enabled --quiet certbot.timer; then ok 'certbot.timer enabled'; else fail 'certbot.timer disabled'; fi
+if systemctl is-active --quiet certbot.timer; then ok 'certbot.timer active'; else fail 'certbot.timer inactive'; fi
+if bash -n /etc/letsencrypt/renewal-hooks/deploy/matrix-stack.sh >/dev/null 2>&1; then ok 'Certbot deploy hook syntax'; else fail 'Certbot deploy hook syntax'; fi
+TOKEN="matrix-verify-$$"
+VALUE="matrix-verify-ok-$$"
+FILE="{{ nginx_sites_root }}/.well-known/acme-challenge/$TOKEN"
+mkdir -p '{{ nginx_sites_root }}/.well-known/acme-challenge'
+printf '%s\n' "$VALUE" > "$FILE"
+chmod 0644 "$FILE"
+ACME_FAILED=0
+for host in '{{ matrix_domains.synapse }}' '{{ matrix_domains.element }}' '{{ matrix_domains.admin }}' '{{ matrix_domains.element_call }}' '{{ matrix_domains.livekit }}' '{{ matrix_domains.turn }}'; do
+    body="$(curl -4fsS --max-time 10 "http://${host}/.well-known/acme-challenge/${TOKEN}" 2>/dev/null)" || body=''
+    if [ "$body" != "$VALUE" ]; then
+        fail "ACME HTTP-01: $host"
+        ACME_FAILED=1
+    fi
+done
+rm -f "$FILE"
+if [ "$ACME_FAILED" -eq 0 ]; then ok 'ACME HTTP-01 работает на всех Matrix hostnames'; fi
+
+section 'Fail2ban'
+F2B_PING="$(fail2ban-client ping 2>/dev/null || true)"
+if grep -q 'Server replied: pong' <<<"$F2B_PING"; then ok 'Fail2ban daemon отвечает'; else fail 'Fail2ban daemon не отвечает'; fi
+if fail2ban-client status sshd >/dev/null 2>&1; then ok 'Fail2ban jail sshd active'; else fail 'Fail2ban jail sshd отсутствует'; fi
+BANNED="$(fail2ban-client get sshd banned 2>/dev/null || true)"
+if [ -n "$BANNED" ] && [ "$BANNED" != '[]' ]; then
+    ok "Fail2ban sshd имеет ban entries: $BANNED"
+else
+    warn 'Fail2ban sshd пока не имеет активных ban entries'
+fi
+
+section 'Nginx'
+if nginx -t >/dev/null 2>&1; then ok 'nginx configuration syntax'; else fail 'nginx configuration syntax'; fi
+
+printf '\n%s====================================================%s\n' "$YELLOW" "$RESET"
+printf 'Итог: %sOK=%d%s  %sWARN=%d%s  %sFAIL=%d%s\n' "$GREEN" "$PASS" "$RESET" "$YELLOW" "$WARN" "$RESET" "$RED" "$FAIL" "$RESET"
+printf '%s====================================================%s\n' "$YELLOW" "$RESET"
+
+if [ "$FAIL" -eq 0 ]; then
+    printf '%sВсе обязательные проверки пройдены успешно.%s\n' "$GREEN" "$RESET"
+    exit 0
+fi
+
+printf '%sОбнаружено ошибок: %d%s\n' "$RED" "$FAIL" "$RESET"
+exit 1
