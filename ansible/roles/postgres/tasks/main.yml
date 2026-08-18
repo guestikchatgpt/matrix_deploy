@@ -138,6 +138,7 @@
   until: pg_ping.is_available | default(false) | bool
   changed_when: false
   no_log: true
+  when: not ansible_check_mode
 
 - name: Show effective PostgreSQL tuning
   ansible.builtin.debug:
