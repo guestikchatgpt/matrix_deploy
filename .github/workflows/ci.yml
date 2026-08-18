@@ -95,18 +95,11 @@ jobs:
           relay_ip="$(ip -4 route get 1.1.1.1 | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
           test -n "$relay_ip"
 
+          # sslip.io resolves arbitrary subdomains containing this IPv4 to the
+          # encoded address, so this exercises real DNS A/AAAA queries without
+          # mutating /etc/hosts or requiring project-owned test DNS.
           public_ip='8.8.8.8'
-          base_domain='matrix-ci.invalid'
-          for host in \
-            "matrix.${base_domain}" \
-            "element.${base_domain}" \
-            "synad.${base_domain}" \
-            "call.${base_domain}" \
-            "rtc.${base_domain}" \
-            "turn.${base_domain}"
-          do
-            printf '%s %s\n' "$public_ip" "$host" | sudo tee -a /etc/hosts >/dev/null
-          done
+          base_domain='8-8-8-8.sslip.io'
 
           cat > /tmp/matrix-ci-preflight.yml <<EOF
           ---
