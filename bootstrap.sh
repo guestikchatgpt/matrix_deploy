@@ -43,7 +43,8 @@ apt-get install -y --no-install-recommends \
   openssl \
   python3 \
   python3-pip \
-  python3-venv
+  python3-venv \
+  skopeo
 
 if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
   log "создаю Python venv"
