@@ -49,6 +49,8 @@
 
   roles:
     - role: common
+    - role: firewall
+    - role: fail2ban
     - role: docker
     - role: nginx
     - role: postgres
@@ -59,5 +61,4 @@
     - role: livekit
     - role: element_jwt
     - role: coturn
-    - role: firewall
     - role: verification
