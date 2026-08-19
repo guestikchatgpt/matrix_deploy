@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+readonly SOURCE_DIR="${MATRIX_DEPLOY_SOURCE_DIR:-/opt/matrix-deploy/source}"
+usage(){ cat <<'USAGE'
+Usage: matrix-deploy <command>
+
+Commands:
+  update   Update installer/playbook source to the latest stable GitHub Release.
+  upgrade  Upgrade the Matrix application stack using the explicit upgrade workflow.
+  verify   Run the installed stack verifier.
+  version  Show the installed matrix-deploy release.
+USAGE
+}
+case "${1:-}" in
+  update) exec bash "${SOURCE_DIR}/scripts/update-source.sh" ;;
+  upgrade) exec bash "${SOURCE_DIR}/scripts/upgrade-stack.sh" ;;
+  verify) [[ -x /usr/local/sbin/matrix-stack-verify ]] && exec /usr/local/sbin/matrix-stack-verify; printf 'matrix-deploy: verifier not found\n' >&2; exit 1 ;;
+  version) cat /etc/matrix-deploy/installed-release 2>/dev/null || printf 'unknown\n' ;;
+  -h|--help|help|'') usage ;;
+  *) usage >&2; exit 2 ;;
+esac

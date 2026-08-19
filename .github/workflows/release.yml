@@ -1,0 +1,35 @@
+name: release-assets
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tag="${GITHUB_REF_NAME}"
+          archive="matrix-deploy-${tag}.tar.gz"
+          tar \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude="$archive" \
+            -czf "$archive" .
+          sha256sum "$archive" > SHA256SUMS
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            matrix-deploy-${{ github.ref_name }}.tar.gz
+            SHA256SUMS
