@@ -187,6 +187,9 @@ Bootstrap остаётся orchestration UX; логика Matrix-сервисо�
 - [x] GitHub Actions gate для static/YAML/shell/Python/Ansible syntax.
 - [x] CI рендерит и shell-валидирует варианты verifier с включённой и отключённой федерацией.
 - [x] README оператора и явный restore runbook/contract.
+- [x] Установка одной командой из stable GitHub Release (`install.sh`, проверка SHA-256, `bootstrap.sh --install`) и CLI `matrix-deploy` поверх converge/upgrade/verify/check/backup/destroy; `matrix-deploy update` с откатом при неудачной подготовке нового релиза.
+- [x] Повторный `deploy.sh` поверх существующей установки отклоняется (нет скрытого перезаписывания топологии и обновления lock без backup).
+- [x] При отключённой федерации Synapse блокирует и исходящую федерацию (`federation_domain_whitelist: []`); verifier не требует метрик при `synapse_enable_metrics=false`.
 
 ### Намеренно отложено до integration testing
 

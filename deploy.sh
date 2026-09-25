@@ -101,7 +101,16 @@ if [[ ! -x "$ANSIBLE_PLAYBOOK" ]]; then
   fatal "Ansible venv отсутствует; сначала запустите ./bootstrap.sh"
 fi
 
+if [[ -e "$CONFIG_FILE" ]]; then
+  fatal "существующая установка найдена (${CONFIG_FILE}). Повторный deploy перезаписал бы топологию и обновил версии без backup. Используйте converge.sh (или converge.sh --admin-password для незавершённой установки) либо upgrade.sh."
+fi
+
 install -d -m 0700 "$STATE_DIR" "$RUNTIME_DIR"
+
+cleanup() {
+  rm -f "$SECRET_FILE"
+}
+trap cleanup EXIT INT TERM
 
 printf '\nMatrix Deploy\n============\n\n'
 
@@ -188,11 +197,6 @@ EOF_SECRET
 chmod 0600 "$SECRET_FILE"
 unset MATRIX_ADMIN_PASSWORD
 
-cleanup() {
-  rm -f "$SECRET_FILE"
-}
-trap cleanup EXIT INT TERM
-
 printf '\nПлан деплоя\n-----------\n'
 printf 'Matrix:       %s.%s\n' "$SYNAPSE_PREFIX" "$BASE_DOMAIN"
 printf 'Element:      %s.%s\n' "$ELEMENT_PREFIX" "$BASE_DOMAIN"
@@ -218,6 +222,7 @@ log 'запускаю Ansible preflight и определяю актуальны
 if ! prompt_yes_no 'Preflight успешен. Запустить деплой?' 'n'; then
   printf 'Деплой отменён. Конфигурация сохранена: %s\n' "$CONFIG_FILE"
   printf 'Выбранные версии сохранены: %s\n' "$VERSION_LOCK_FILE"
+  printf 'Продолжить позже: ./converge.sh --admin-password\n'
   exit 0
 fi
 

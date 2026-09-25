@@ -209,11 +209,13 @@ http_check 'Synapse client API' 'https://{{ matrix_domains.synapse }}/_matrix/cl
 {% if synapse_enable_federation | bool %}
 http_check 'Synapse federation API :8448' 'https://{{ matrix_domains.synapse }}:8448/_matrix/federation/v1/version'
 {% endif %}
+{% if synapse_enable_metrics | bool %}
 if curl -fsS --max-time 5 http://127.0.0.1:8008/_synapse/metrics >/dev/null 2>&1; then
     ok 'Synapse metrics доступны локально'
 else
     fail 'Synapse metrics недоступны локально'
 fi
+{% endif %}
 PUBLIC_METRICS="$(curl -4sk --max-time 10 "${CURL_LOCAL_RESOLVE[@]}" -o /dev/null -w '%{http_code}' https://{{ matrix_domains.synapse }}/_synapse/metrics)"
 if [ "$PUBLIC_METRICS" = '404' ]; then
     ok 'Synapse metrics закрыты снаружи'

@@ -60,6 +60,12 @@ trusted_key_servers:
 default_room_version: '11'
 
 federation_endpoint_timeout_ms: 15000
+{% if not synapse_enable_federation | bool %}
+# Federation disabled: an empty whitelist also blocks outbound federation, so
+# the server does not end up half-federated (able to join remote rooms while
+# remote servers cannot reach it).
+federation_domain_whitelist: []
+{% endif %}
 
 url_preview_enabled: {{ synapse_url_preview_enabled | bool | lower }}
 url_preview_ip_range_blacklist:

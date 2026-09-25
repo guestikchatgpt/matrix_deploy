@@ -73,13 +73,23 @@ lock сохраняется. При первом deploy или явном `upgra
 
 ## Первое развёртывание
 
-Предполагаемая схема работы — Ansible с локальным контроллером: репозиторий
-клонируется непосредственно на целевой сервер и запускается там.
+Предполагаемая схема работы — Ansible с локальным контроллером: всё выполняется
+непосредственно на целевом сервере.
+
+Установка из stable GitHub Release одной командой (подробно — `INSTALLER.md`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/guestikchatgpt/matrix_deploy/main/install.sh | sudo bash
+```
+
+После неё все операции доступны через CLI `matrix-deploy` (`converge`,
+`upgrade`, `verify`, `check`, `backup`, `destroy`, `update`).
+
+Либо из git-клона:
 
 ```bash
 git clone https://github.com/guestikchatgpt/matrix_deploy.git
 cd matrix_deploy
-git switch agent/roadmap-hardening   # пока этот PR не слит
 sudo ./bootstrap.sh
 ```
 
@@ -161,6 +171,10 @@ Preflight проверяет, появились ли новые stable releases
 
 Если существующая учётная запись администратора уже создана, пароль
 администратора Matrix повторно не запрашивается.
+
+Повторный запуск `bootstrap.sh`/`deploy.sh` на хосте, где уже есть
+`/etc/matrix-deploy/deployment.yml`, отклоняется: он перезаписал бы топологию и
+обновил бы версии без backup.
 
 Если первое развёртывание прервалось после сохранения топологии, но до создания
 начальной учётной записи `@admin`, можно продолжить без повторного ввода
@@ -393,6 +407,7 @@ Matrix/Nginx-специфичные фильтры не включаются, п
 /var/www/matrix/                        Matrix well-known + ACME webroot
 /var/backups/matrix-deploy/             защищённые резервные копии
 /usr/local/sbin/matrix-stack-verify     установленный verifier
+/opt/matrix-deploy/                     установленный релиз установщика и CLI matrix-deploy
 ```
 
 Не добавляйте в Git `/etc/matrix-deploy`, `.venv`, сгенерированные секреты,
