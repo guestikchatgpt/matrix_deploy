@@ -99,18 +99,19 @@ AAAA-записей (IPv6) для этих имён быть не должно. 
 
 ### Затем — сама установка
 
-Одной командой под `root` — ставится последний stable-релиз (архив
-проверяется по SHA-256):
+Под `root` подготовьте `curl`, затем запустите установщик. Он скачает последний
+стабильный GitHub Release и проверит SHA-256 архива перед запуском:
 
 ```bash
-apt-get update && apt-get -y full-upgrade
-curl -fsSL https://raw.githubusercontent.com/guestikchatgpt/matrix_deploy/main/install.sh | bash
+apt-get update && apt-get install -y ca-certificates curl
+curl -fsSL https://raw.githubusercontent.com/guestikchatgpt/matrix_deploy/main/install.sh -o /root/matrix-deploy-install.sh && bash /root/matrix-deploy-install.sh
 ```
 
-Или из git, зафиксировав релиз:
+Или клонируйте конкретный тег релиза (также под `root`):
 
 ```bash
-apt-get install -y git
+apt-get update && apt-get install -y git
+mkdir -p /opt/matrix-deploy
 git clone --branch v1.0.0 https://github.com/guestikchatgpt/matrix_deploy.git /opt/matrix-deploy/source
 cd /opt/matrix-deploy/source
 ./bootstrap.sh --install
@@ -133,11 +134,25 @@ cd /opt/matrix-deploy/source
 | `matrix-deploy backup` | резервная копия БД и конфигурации (`--include-media` — вместе с файлами пользователей) |
 | `matrix-deploy check` | показать, что изменилось бы, ничего не меняя |
 | `matrix-deploy destroy` | удалить установку (сначала полный backup, два подтверждения) |
-| `matrix-deploy update` | обновить сам установщик (для установки из релиза; для git — `git pull`) |
+| `matrix-deploy update` | обновить установщик из GitHub Release; для git-клона используйте команды ниже |
 | `matrix-deploy version` | версия установщика |
 
 Те же операции доступны скриптами в корне репозитория: `converge.sh`,
 `upgrade.sh`, `verify.sh`, `backup.sh`, `check.sh`, `destroy.sh`.
+
+Если установка сделана из git-клона с тегом `v1.0.0`, обновляйте его переходом
+на нужный следующий тег. Такой клон находится в detached HEAD, поэтому обычный
+`git pull` в нём не сработает:
+
+```bash
+git -C /opt/matrix-deploy/source fetch --tags
+git -C /opt/matrix-deploy/source checkout vX.Y.Z  # укажите опубликованный новый тег
+/opt/matrix-deploy/source/bootstrap.sh --prepare-only
+matrix-deploy converge
+```
+
+Если `converge` сообщает, что новые playbook требуют более свежих версий
+приложений, выполните `matrix-deploy upgrade` (перед обновлением он делает backup).
 
 ## Файлы
 
