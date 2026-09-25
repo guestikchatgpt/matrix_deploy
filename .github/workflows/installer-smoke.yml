@@ -1,0 +1,24 @@
+name: installer-smoke
+
+on:
+  push:
+    paths:
+      - 'install.sh'
+      - 'bootstrap.sh'
+      - 'scripts/**'
+      - 'tests/installer-smoke.sh'
+      - '.github/workflows/installer-smoke.yml'
+  pull_request:
+    paths:
+      - 'install.sh'
+      - 'bootstrap.sh'
+      - 'scripts/**'
+      - 'tests/installer-smoke.sh'
+      - '.github/workflows/installer-smoke.yml'
+
+jobs:
+  shell-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo bash tests/installer-smoke.sh

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly INSTALL_ROOT="${MATRIX_DEPLOY_INSTALL_ROOT:-/opt/matrix-deploy}"
+readonly SOURCE_DIR="${MATRIX_DEPLOY_SOURCE_DIR:-${INSTALL_ROOT}/source}"
+readonly RELEASE_MARKER="${INSTALL_ROOT}/installed-release"
+
+usage() {
+  cat <<'USAGE'
+Usage: matrix-deploy <command> [options]
+
+Commands:
+  update             Update installer/playbook source to the latest stable GitHub Release.
+                     Does not change the Matrix application stack.
+  converge [opts]    Re-apply configuration with the existing version lock (converge.sh).
+  upgrade            Backup, refresh the version lock and apply it (upgrade.sh).
+  verify [--deep]    Run the stack verifier (verify.sh).
+  check              Ansible check/diff against the deployed host (check.sh).
+  backup [--include-media]
+                     Create a protected backup (backup.sh).
+  destroy            Remove the deployment after backup and confirmations (destroy.sh).
+  version            Show the installed matrix-deploy release.
+USAGE
+}
+
+run() {
+  local script="${SOURCE_DIR}/$1"
+  shift
+  [[ -x "$script" ]] || { printf 'matrix-deploy: %s not found; is matrix-deploy installed?\n' "$script" >&2; exit 1; }
+  exec "$script" "$@"
+}
+
+command="${1:-}"
+[[ $# -gt 0 ]] && shift
+
+case "$command" in
+  update) exec bash "${SOURCE_DIR}/scripts/update-source.sh" "$@" ;;
+  converge) run converge.sh "$@" ;;
+  upgrade) run upgrade.sh "$@" ;;
+  verify) run verify.sh "$@" ;;
+  check) run check.sh "$@" ;;
+  backup) run backup.sh "$@" ;;
+  destroy) run destroy.sh "$@" ;;
+  version) cat "$RELEASE_MARKER" 2>/dev/null || printf 'unknown\n' ;;
+  -h|--help|help|'') usage ;;
+  *) usage >&2; exit 2 ;;
+esac

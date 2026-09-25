@@ -1,34 +1,111 @@
 ---
-- name: Ensure PostgreSQL data dir
+- name: Create PostgreSQL directories
   ansible.builtin.file:
-    path: "{{ matrix_root_dir }}/postgres/data"
+    path: "{{ item.path }}"
     state: directory
-    owner: 999
-    group: 999
-    mode: "0700"
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ postgresql_data_dir }}"
+      owner: '999'
+      group: '999'
+      mode: '0700'
+    - path: "{{ matrix_root_dir }}/postgres/config"
+      owner: root
+      group: root
+      mode: '0755'
+
+- name: Check existing PostgreSQL major version marker
+  ansible.builtin.stat:
+    path: "{{ postgresql_data_dir }}/pgdata/PG_VERSION"
+  register: postgresql_pg_version_file
+
+- name: Read existing PostgreSQL major version
+  ansible.builtin.slurp:
+    src: "{{ postgresql_data_dir }}/pgdata/PG_VERSION"
+  register: postgresql_pg_version_raw
+  when: postgresql_pg_version_file.stat.exists
+
+- name: Guard against accidental PostgreSQL major upgrades
+  ansible.builtin.assert:
+    that:
+      - (postgresql_pg_version_raw.content | b64decode | trim) == (postgresql_version | string)
+    fail_msg: >-
+      Existing PostgreSQL data directory is major version
+      {{ postgresql_pg_version_raw.content | b64decode | trim }}, but the
+      configured container major version is {{ postgresql_version }}.
+      Refusing an implicit major upgrade. Use the explicit upgrade workflow.
+  when: postgresql_pg_version_file.stat.exists
 
 - name: Generate password for Synapse DB user
   ansible.builtin.set_fact:
-    postgresql_synapse_password: "{{ lookup('password', matrix_root_dir + '/.secrets/postgres_synapse_password length=' + (postgresql_synapse_password_length | string)) }}"
+    postgresql_synapse_password: >-
+      {{ lookup('password', matrix_root_dir + '/.secrets/postgres_synapse_password length=' +
+                (postgresql_synapse_password_length | string)) }}
   no_log: true
+
+- name: Derive conservative PostgreSQL tuning from host resources
+  ansible.builtin.set_fact:
+    postgresql_effective_tuning:
+      shared_buffers_mb: >-
+        {{ [([((ansible_facts['memtotal_mb'] | int) * 0.125) | int, 256] | max),
+             (postgresql_tuning.shared_buffers_mb | int)] | min }}
+      effective_cache_size_mb: >-
+        {{ [([((ansible_facts['memtotal_mb'] | int) * 0.50) | int, 1024] | max),
+             (postgresql_tuning.effective_cache_size_mb | int)] | min }}
+      maintenance_work_mem_mb: >-
+        {{ [([((ansible_facts['memtotal_mb'] | int) * 0.03) | int, 128] | max),
+             (postgresql_tuning.maintenance_work_mem_mb | int)] | min }}
+      autovacuum_work_mem_mb: >-
+        {{ [([((ansible_facts['memtotal_mb'] | int) * 0.015) | int, 64] | max),
+             (postgresql_tuning.autovacuum_work_mem_mb | int)] | min }}
+      work_mem_mb: >-
+        {{ [((16 if (ansible_facts['memtotal_mb'] | int) >= 4096 else 8) | int),
+             (postgresql_tuning.work_mem_mb | int)] | min }}
+      max_connections: "{{ postgresql_tuning.max_connections | int }}"
+      max_wal_size: "{{ postgresql_tuning.max_wal_size }}"
+      min_wal_size: "{{ postgresql_tuning.min_wal_size }}"
+      max_parallel_workers: >-
+        {{ [([ansible_facts.get('processor_vcpus', ansible_facts.get('processor_count', 1)) | int, 1] | max),
+             (postgresql_tuning.max_parallel_workers | int)] | min }}
+      max_parallel_workers_per_gather: >-
+        {{ postgresql_tuning.max_parallel_workers_per_gather | int }}
+      max_parallel_maintenance_workers: >-
+        {{ postgresql_tuning.max_parallel_maintenance_workers | int }}
+
+- name: Render managed PostgreSQL configuration
+  ansible.builtin.template:
+    src: matrix-postgresql.conf.j2
+    dest: "{{ matrix_root_dir }}/postgres/config/postgresql.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart PostgreSQL container
 
 - name: Run PostgreSQL container
   community.docker.docker_container:
     name: postgres
     image: "{{ postgresql_image }}"
     restart_policy: always
-    pull: true
-    user: "999:999"
+    pull: missing
+    user: '999:999'
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
     env:
       POSTGRES_DB: "{{ postgresql_synapse_db }}"
       POSTGRES_USER: "{{ postgresql_synapse_user }}"
       POSTGRES_PASSWORD: "{{ postgresql_synapse_password }}"
       PGDATA: /var/lib/postgresql/data/pgdata
-      POSTGRES_INITDB_ARGS: "--data-checksums --encoding=UTF8 --locale=C --lc-collate=C --lc-ctype=C"
+      POSTGRES_INITDB_ARGS: >-
+        --data-checksums --encoding=UTF8 --locale=C --lc-collate=C --lc-ctype=C
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
     volumes:
-      - "{{ matrix_root_dir }}/postgres/data:/var/lib/postgresql/data"
+      - "{{ postgresql_data_dir }}:/var/lib/postgresql/data"
+      - "{{ matrix_root_dir }}/postgres/config/postgresql.conf:/etc/postgresql/postgresql.conf:ro"
     published_ports:
       - "127.0.0.1:{{ postgresql_host_port }}:5432"
     networks:
@@ -36,20 +113,33 @@
         aliases:
           - postgres
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U {{ postgresql_synapse_user }} -d {{ postgresql_synapse_db }}"]
+      test:
+        - CMD-SHELL
+        - "pg_isready -U {{ postgresql_synapse_user }} -d {{ postgresql_synapse_db }}"
       interval: 30s
       timeout: 5s
       retries: 5
     state: started
+  no_log: true
+
+- name: Apply PostgreSQL configuration changes before readiness check
+  ansible.builtin.meta: flush_handlers
 
 - name: Wait for PostgreSQL to be available
   community.postgresql.postgresql_ping:
-    login_host: "127.0.0.1"
+    login_host: 127.0.0.1
     login_port: "{{ postgresql_host_port }}"
     login_user: "{{ postgresql_synapse_user }}"
     login_password: "{{ postgresql_synapse_password }}"
-    db: "{{ postgresql_synapse_db }}"
+    login_db: "{{ postgresql_synapse_db }}"
   register: pg_ping
   retries: 20
   delay: 3
-  until: pg_ping is succeeded
+  until: pg_ping.is_available | default(false) | bool
+  changed_when: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Show effective PostgreSQL tuning
+  ansible.builtin.debug:
+    var: postgresql_effective_tuning

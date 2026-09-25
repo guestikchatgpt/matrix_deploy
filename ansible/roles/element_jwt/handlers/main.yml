@@ -2,4 +2,5 @@
 - name: Restart Element JWT
   community.docker.docker_container:
     name: element-jwt
-    state: restarted
+    restart: true
+    state: started

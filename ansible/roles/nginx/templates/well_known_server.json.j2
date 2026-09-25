@@ -1,4 +1,10 @@
-
+{#
+  m.server is published even when federation is disabled: lk-jwt-service
+  resolves the homeserver for MatrixRTC OpenID validation through
+  .well-known/matrix/server and would otherwise fall back to port 8448, which
+  is closed in that mode. Federation itself stays off: Synapse exposes only the
+  openid resource and federation_domain_whitelist is empty.
+#}
 {
   "m.server": "{{ matrix_domains.synapse }}:443"
 }

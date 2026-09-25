@@ -1,5 +1,5 @@
 ---
-- name: Create Synapse directories (uid/gid {{ synapse_uid }}:{{ synapse_gid }})
+- name: Create Synapse directories
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: directory
@@ -7,33 +7,39 @@
     group: "{{ synapse_gid }}"
     mode: "{{ item.mode | default('0750') }}"
   loop:
-    - { path: "{{ synapse_data_dir }}", mode: "0750" }
+    - { path: "{{ synapse_data_dir }}", mode: '0750' }
     - { path: "{{ synapse_media_store }}" }
     - { path: "{{ synapse_app_service_dir }}" }
 
 - name: Generate Synapse secrets
   ansible.builtin.set_fact:
-    synapse_registration_shared_secret: "{{ lookup('password', matrix_root_dir + '/.secrets/synapse_registration_shared_secret length=' + (synapse_registration_shared_secret_len | string) + ' chars=ascii_letters,digits') }}"
-    synapse_macaroon_secret_key: "{{ lookup('password', matrix_root_dir + '/.secrets/synapse_macaroon_secret length=' + (synapse_macaroon_secret_len | string) + ' chars=ascii_letters,digits') }}"
-    synapse_form_secret: "{{ lookup('password', matrix_root_dir + '/.secrets/synapse_form_secret length=' + (synapse_form_secret_len | string) + ' chars=ascii_letters,digits') }}"
+    synapse_registration_shared_secret: >-
+      {{ lookup('password', matrix_root_dir + '/.secrets/synapse_registration_shared_secret length=' +
+                (synapse_registration_shared_secret_len | string) + ' chars=ascii_letters,digits') }}
+    synapse_macaroon_secret_key: >-
+      {{ lookup('password', matrix_root_dir + '/.secrets/synapse_macaroon_secret length=' +
+                (synapse_macaroon_secret_len | string) + ' chars=ascii_letters,digits') }}
+    synapse_form_secret: >-
+      {{ lookup('password', matrix_root_dir + '/.secrets/synapse_form_secret length=' +
+                (synapse_form_secret_len | string) + ' chars=ascii_letters,digits') }}
   no_log: true
 
-- name: Render homeserver.yaml (uid/gid {{ synapse_uid }}:{{ synapse_gid }})
+- name: Render homeserver.yaml
   ansible.builtin.template:
     src: homeserver.yaml.j2
     dest: "{{ synapse_config_dir }}/homeserver.yaml"
     owner: "{{ synapse_uid }}"
     group: "{{ synapse_gid }}"
-    mode: "0640"
+    mode: '0640'
   notify: Restart Synapse
 
-- name: Render log.config (uid/gid {{ synapse_uid }}:{{ synapse_gid }})
+- name: Render log.config
   ansible.builtin.template:
     src: log.config.j2
     dest: "{{ synapse_config_dir }}/log.config"
     owner: "{{ synapse_uid }}"
     group: "{{ synapse_gid }}"
-    mode: "0640"
+    mode: '0640'
   notify: Restart Synapse
 
 - name: Run Synapse container
@@ -42,62 +48,119 @@
     image: "{{ synapse_image }}"
     restart_policy: always
     user: "{{ synapse_uid }}:{{ synapse_gid }}"
-    pull: true
+    pull: missing
     networks:
       - name: "{{ docker_network_name }}"
     env:
       SYNAPSE_SERVER_NAME: "{{ matrix_domains.synapse }}"
       SYNAPSE_REPORT_STATS: "{{ synapse_report_stats | ternary('yes', 'no') }}"
-      SYNAPSE_CONFIG_PATH: "/data/homeserver.yaml"
+      SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
     volumes:
       - "{{ synapse_data_dir }}:/data"
     published_ports:
-      - "127.0.0.1:8008:8008"
+      - '127.0.0.1:8008:8008'
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8008/_matrix/client/versions"]
+      test: [CMD, curl, -f, 'http://localhost:8008/_matrix/client/versions']
       interval: 30s
       timeout: 5s
       retries: 5
     state: started
-  register: synapse_container
+
+- name: Apply Synapse configuration changes before readiness check
+  ansible.builtin.meta: flush_handlers
 
 - name: Wait for Synapse
   ansible.builtin.uri:
     url: http://127.0.0.1:8008/_matrix/client/versions
     status_code: 200
   register: synapse_up
-  retries: 10
-  delay: 6
-  until: synapse_up.status == 200
+  retries: 20
+  delay: 3
+  until: synapse_up.status | default(0) == 200
+  when: not ansible_check_mode
 
-- name: Check Synapse admin marker
-  ansible.builtin.stat:
-    path: "{{ synapse_config_dir }}/.admin_{{ matrix_admin_user }}"
-  register: synapse_admin_marker
-
-- name: Create Synapse admin user
-  ansible.builtin.command: >
-    docker exec {{ synapse_container_name }}
-    register_new_matrix_user
-    --config /data/homeserver.yaml
-    --user {{ matrix_admin_user }}
-    --password {{ matrix_admin_password }}
-    --admin
-    http://localhost:8008
-  when: not synapse_admin_marker.stat.exists and matrix_admin_password | length > 0
+- name: Read Matrix admin state from Synapse database
+  community.docker.docker_container_exec:
+    container: postgres
+    argv:
+      - psql
+      - -U
+      - "{{ postgresql_synapse_user }}"
+      - -d
+      - "{{ postgresql_synapse_db }}"
+      - -tAc
+      - >-
+        SELECT COALESCE((SELECT admin::int FROM users
+        WHERE name='@{{ matrix_admin_user }}:{{ matrix_domains.synapse }}'), -1);
+  register: synapse_admin_db_state
+  changed_when: false
   no_log: true
-  register: synapse_admin_create
-  changed_when: synapse_admin_create.rc == 0
-  failed_when: synapse_admin_create.rc not in [0, 1]
+  when: not ansible_check_mode
 
-- name: Touch Synapse admin marker
-  ansible.builtin.file:
-    path: "{{ synapse_config_dir }}/.admin_{{ matrix_admin_user }}"
-    state: touch
-    owner: "{{ matrix_system_user }}"
-    group: "{{ matrix_system_group }}"
-    mode: "0600"
+- name: Refuse to silently promote an existing non-admin Matrix user
+  ansible.builtin.assert:
+    that:
+      - synapse_admin_db_state.stdout | trim != '0'
+    fail_msg: >-
+      @{{ matrix_admin_user }}:{{ matrix_domains.synapse }} already exists but is
+      not an administrator. Refusing to change privileges implicitly.
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Require admin password only for initial admin creation
+  ansible.builtin.assert:
+    that:
+      - matrix_admin_password | default('') | length > 0
+    fail_msg: >-
+      Matrix admin does not exist yet. Supply matrix_admin_password for the
+      initial deployment; later converges do not require the password.
   when:
-    - not synapse_admin_marker.stat.exists
-    - synapse_admin_create is defined
-    - synapse_admin_create.rc == 0
+    - not ansible_check_mode
+    - synapse_admin_db_state.stdout | trim == '-1'
+  no_log: true
+
+- name: Create Synapse admin user when it does not exist
+  community.docker.docker_container_exec:
+    container: "{{ synapse_container_name }}"
+    argv:
+      - register_new_matrix_user
+      - --config
+      - /data/homeserver.yaml
+      - --user
+      - "{{ matrix_admin_user }}"
+      - --password
+      - "{{ matrix_admin_password | default('') }}"
+      - --admin
+      - http://localhost:8008
+  when:
+    - not ansible_check_mode
+    - synapse_admin_db_state.stdout | trim == '-1'
+  register: synapse_admin_create
+  changed_when: true
+  no_log: true
+
+- name: Verify Matrix admin state after reconciliation
+  community.docker.docker_container_exec:
+    container: postgres
+    argv:
+      - psql
+      - -U
+      - "{{ postgresql_synapse_user }}"
+      - -d
+      - "{{ postgresql_synapse_db }}"
+      - -tAc
+      - >-
+        SELECT COALESCE((SELECT admin::int FROM users
+        WHERE name='@{{ matrix_admin_user }}:{{ matrix_domains.synapse }}'), -1);
+  register: synapse_admin_db_verify
+  changed_when: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Require configured Matrix admin to exist and be administrator
+  ansible.builtin.assert:
+    that:
+      - synapse_admin_db_verify.stdout | trim == '1'
+    fail_msg: 'Matrix admin reconciliation failed.'
+  no_log: true
+  when: not ansible_check_mode

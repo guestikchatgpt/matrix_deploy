@@ -1,0 +1,278 @@
+---
+- name: Require Ubuntu 24.04 LTS
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Ubuntu'
+      - ansible_facts['distribution_version'] is version('24.04', '>=')
+      - ansible_facts['distribution_version'] is version('25.04', '<')
+      - ansible_facts['distribution_release'] == 'noble'
+    fail_msg: >-
+      Matrix Deploy currently supports Ubuntu 24.04 LTS (noble) only.
+      Detected {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
+      ({{ ansible_facts['distribution_release'] }}).
+
+- name: Require root-effective execution
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['effective_user_id'] | int == 0
+    fail_msg: 'Preflight must run with become/root privileges.'
+
+- name: Validate required deployment variables
+  ansible.builtin.assert:
+    that:
+      - matrix_base_domain | length > 3
+      - matrix_external_ip | length >= 7
+      - certbot_email | length > 3
+      - coturn_network_mode in ['direct_public', 'nat']
+      - coturn_relay_ip | length >= 7
+      - matrix_ssh_port | int > 0
+      - matrix_ssh_port | int < 65536
+    fail_msg: 'Deployment variables are incomplete or invalid.'
+
+- name: Require a globally routable public IPv4
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - >-
+        import ipaddress,sys;
+        a=ipaddress.ip_address(sys.argv[1]);
+        assert a.version == 4 and a.is_global,
+        f'not a globally routable IPv4: {a}'
+      - "{{ matrix_external_ip }}"
+  changed_when: false
+
+- name: Validate Coturn relay IPv4
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - "import ipaddress,sys; a=ipaddress.ip_address(sys.argv[1]); assert a.version == 4"
+      - "{{ coturn_relay_ip }}"
+  changed_when: false
+
+- name: Ensure Matrix Deploy state directory exists for version lock
+  ansible.builtin.file:
+    path: "{{ matrix_version_lock_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Check existing resolved-version lock
+  ansible.builtin.stat:
+    path: "{{ matrix_version_lock_file }}"
+  register: matrix_version_lock_stat
+
+- name: Select version-resolution mode
+  ansible.builtin.set_fact:
+    matrix_version_resolution_mode: >-
+      {{ 'refresh' if (matrix_refresh_versions | bool or not matrix_version_lock_stat.stat.exists)
+         else 'check' }}
+
+- name: Resolve or check current stable upstream versions
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ playbook_dir }}/../../tools/resolve_versions.py"
+      - --policy
+      - "{{ playbook_dir }}/../inventory/group_vars/all/versions.yml"
+      - --lock
+      - "{{ matrix_version_lock_file }}"
+      - "{{ '--refresh' if matrix_version_resolution_mode == 'refresh' else '--check' }}"
+  environment:
+    GITHUB_TOKEN: "{{ lookup('env', 'GITHUB_TOKEN') | default('', true) }}"
+  register: matrix_version_resolution
+  changed_when: "'LOCK_UPDATED ' in matrix_version_resolution.stdout"
+
+- name: Show upstream version resolution
+  ansible.builtin.debug:
+    msg: "{{ matrix_version_resolution.stdout_lines }}"
+
+- name: Load resolved-version lock
+  ansible.builtin.include_vars:
+    file: "{{ matrix_version_lock_file }}"
+
+- name: Validate resolved-version lock
+  ansible.builtin.assert:
+    that:
+      - matrix_version_lock is mapping
+      - matrix_version_lock.schema | int == 1
+      - matrix_version_lock.components is mapping
+      - matrix_version_lock.components | length == matrix_version_sources | length
+      - matrix_resolved_images is sequence
+      - matrix_resolved_images | length == matrix_version_sources | length
+      - postgresql_version | string == postgresql_major | string
+    fail_msg: >-
+      Resolved version lock {{ matrix_version_lock_file }} is incomplete or incompatible.
+      Refresh it with upgrade.sh or remove it only on a fresh deployment.
+
+- name: Collect target FQDNs
+  ansible.builtin.set_fact:
+    matrix_preflight_domains:
+      - "{{ matrix_domains.synapse }}"
+      - "{{ matrix_domains.element }}"
+      - "{{ matrix_domains.admin }}"
+      - "{{ matrix_domains.element_call }}"
+      - "{{ matrix_domains.livekit }}"
+      - "{{ matrix_domains.turn }}"
+
+- name: Validate host resources
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['memtotal_mb'] | int >= 2048
+      - ansible_facts.get('processor_vcpus', ansible_facts.get('processor_count', 1)) | int >= 2
+    fail_msg: >-
+      Minimum supported host size is 2 vCPU and 2 GiB RAM.
+      Detected {{ ansible_facts.get('processor_vcpus', ansible_facts.get('processor_count', 1)) }} vCPU,
+      {{ ansible_facts['memtotal_mb'] }} MiB RAM.
+
+- name: Read root filesystem free space
+  ansible.builtin.set_fact:
+    matrix_root_mount: >-
+      {{ (ansible_facts['mounts'] | selectattr('mount', 'equalto', '/') | list | first) }}
+
+- name: Require at least 10 GiB free on root filesystem
+  ansible.builtin.assert:
+    that:
+      - matrix_root_mount.size_available | int >= 10737418240
+    fail_msg: 'At least 10 GiB free space is required on /.'
+
+- name: Resolve DNS A records for Matrix hostnames
+  ansible.builtin.command:
+    argv:
+      - dig
+      - +short
+      - A
+      - "{{ item }}"
+  loop: "{{ matrix_preflight_domains }}"
+  register: matrix_dns_a
+  changed_when: false
+
+- name: Require every Matrix hostname to resolve only to configured public IPv4
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item.stdout |
+         regex_findall('(?m)^([0-9]+(?:\.[0-9]+){3})$') |
+         unique | list) == [matrix_external_ip]
+    fail_msg: >-
+      DNS A validation failed for {{ item.item }}.
+      Every published A record must resolve to {{ matrix_external_ip }}.
+      DNS output: {{ item.stdout | default('unresolved') }}
+  loop: "{{ matrix_dns_a.results }}"
+
+- name: Resolve DNS AAAA records when IPv6 support is disabled
+  ansible.builtin.command:
+    argv:
+      - dig
+      - +short
+      - AAAA
+      - "{{ item }}"
+  loop: "{{ matrix_preflight_domains }}"
+  register: matrix_dns_aaaa
+  changed_when: false
+  when: not matrix_ipv6_enabled | bool
+
+- name: Reject real AAAA records while IPv6 mode is disabled
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item.stdout |
+         regex_findall('(?m)^([0-9A-Fa-f:]+)$') |
+         list | length) == 0
+    fail_msg: >-
+      {{ item.item }} publishes an AAAA record while matrix_ipv6_enabled=false.
+      Remove AAAA records or implement/enable the IPv6 deployment mode first.
+      DNS output: {{ item.stdout | default('unresolved') }}
+  loop: "{{ matrix_dns_aaaa.results | default([]) }}"
+  when: not matrix_ipv6_enabled | bool
+
+- name: Read local IPv4 addresses
+  ansible.builtin.command: ip -4 -o addr show
+  register: matrix_local_ipv4
+  changed_when: false
+
+- name: Build exact local IPv4 address list
+  ansible.builtin.set_fact:
+    matrix_local_ipv4_addresses: >-
+      {{ matrix_local_ipv4.stdout |
+         regex_findall('(?:^|\s)inet\s+([0-9]+(?:\.[0-9]+){3})/') |
+         unique | list }}
+
+- name: Validate direct-public Coturn mode
+  ansible.builtin.assert:
+    that:
+      - matrix_external_ip in matrix_local_ipv4_addresses
+      - coturn_relay_ip == matrix_external_ip
+    fail_msg: >-
+      direct_public mode requires matrix_external_ip to be assigned locally and
+      coturn_relay_ip to match it. Local IPv4 addresses: {{ matrix_local_ipv4_addresses }}
+  when: coturn_network_mode == 'direct_public'
+
+- name: Validate NAT Coturn mode
+  ansible.builtin.assert:
+    that:
+      - coturn_relay_ip in matrix_local_ipv4_addresses
+      - matrix_external_ip not in matrix_local_ipv4_addresses
+    fail_msg: >-
+      NAT mode requires coturn_relay_ip to be a local address and
+      matrix_external_ip to be the public translated address.
+      Local IPv4 addresses: {{ matrix_local_ipv4_addresses }}
+  when: coturn_network_mode == 'nat'
+
+- name: Collect local listening sockets
+  ansible.builtin.command: ss -H -lntup
+  register: matrix_preflight_sockets
+  changed_when: false
+
+- name: Determine whether an existing managed deployment is present
+  ansible.builtin.stat:
+    path: "{{ matrix_root_dir }}"
+  register: matrix_existing_root
+
+- name: Build fresh-install reserved port list
+  ansible.builtin.set_fact:
+    matrix_preflight_reserved_ports: >-
+      {{ [80, 443, 5432, 8008,
+          element_web_host_port, synad_host_port, element_call_host_port,
+          element_jwt_host_port, coturn_udp_port, coturn_tls_port,
+          livekit_turn_udp_port, livekit_turn_tls_port,
+          livekit_http_port, livekit_rtc_tcp_port] +
+         ([8448] if synapse_enable_federation | bool else []) }}
+
+- name: Reject conflicting listeners on a fresh host
+  ansible.builtin.assert:
+    that:
+      - >-
+        (':' ~ (item | string) ~ ' ') not in matrix_preflight_sockets.stdout
+    fail_msg: >-
+      Port {{ item }} is already listening on a host without an existing
+      {{ matrix_root_dir }} deployment. Resolve the conflict before deployment.
+  loop: "{{ matrix_preflight_reserved_ports }}"
+  when:
+    - not matrix_existing_root.stat.exists
+    - item | int != matrix_ssh_port | int
+
+- name: Check apt repository reachability
+  ansible.builtin.uri:
+    url: https://archive.ubuntu.com/ubuntu/dists/noble/Release
+    method: HEAD
+    status_code: [200, 301, 302]
+    timeout: 10
+  changed_when: false
+
+- name: Preflight summary
+  ansible.builtin.debug:
+    msg:
+      - 'Ubuntu 24.04 LTS: OK'
+      - 'RAM: {{ ansible_facts["memtotal_mb"] }} MiB'
+      - 'vCPU: {{ ansible_facts.get("processor_vcpus", ansible_facts.get("processor_count", 1)) }}'
+      - 'Public IPv4: {{ matrix_external_ip }}'
+      - 'Coturn mode: {{ coturn_network_mode }} (relay={{ coturn_relay_ip }})'
+      - 'SSH port: {{ matrix_ssh_port }}'
+      - 'Federation: {{ synapse_enable_federation }}'
+      - 'Version mode: {{ matrix_version_resolution_mode }}'
+      - 'Version lock: {{ matrix_version_lock_file }}'
+      - 'Existing managed root: {{ matrix_existing_root.stat.exists }}'
+      - 'DNS A validation: OK for {{ matrix_preflight_domains | length }} hostnames'
