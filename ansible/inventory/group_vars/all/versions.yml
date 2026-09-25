@@ -107,5 +107,9 @@ matrix_version_sources:
     release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
     tag_transform: identity
     image: ghcr.io/etkecc/ketesa
+    # Maintainers publish the identical image on Docker Hub (same manifest
+    # digest), used when ghcr.io is unreachable.
+    alternate_images:
+      - docker.io/etkecc/ketesa
     output_image_var: synad_image
     output_version_var: synad_version

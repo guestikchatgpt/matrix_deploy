@@ -80,10 +80,15 @@
       - --lock
       - "{{ matrix_version_lock_file }}"
       - "{{ '--refresh' if matrix_version_resolution_mode == 'refresh' else '--check' }}"
-  environment:
-    GITHUB_TOKEN: "{{ lookup('env', 'GITHUB_TOKEN') | default('', true) }}"
+      - --mirrors-json
+      - "{{ matrix_registry_mirrors | to_json }}"
+  environment: >-
+    {{ {'GITHUB_TOKEN': lookup('env', 'GITHUB_TOKEN') | default('', true)}
+       | combine(matrix_registry_proxy_env) }}
   register: matrix_version_resolution
-  changed_when: "'LOCK_UPDATED ' in matrix_version_resolution.stdout"
+  changed_when: >-
+    'LOCK_UPDATED ' in matrix_version_resolution.stdout or
+    'LOCK_DIGESTS_ADDED ' in matrix_version_resolution.stdout
 
 - name: Show upstream version resolution
   ansible.builtin.debug:

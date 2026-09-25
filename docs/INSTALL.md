@@ -184,6 +184,20 @@ matrix-deploy verify
 - **Установка прервалась посередине** (обрыв SSH, ошибка сети) —
   `matrix-deploy converge --admin-password`. Пароль нужен только если учётная
   запись `@admin` ещё не создана; в `/etc/matrix-deploy` он не сохраняется.
+- **Не скачивается образ** (`i/o timeout` к `ghcr.io` или Docker Hub). Установщик
+  сам пробует upstream, официальный альтернативный реестр и публичные зеркала,
+  всегда по зафиксированному digest. Если не помогло ни одно, добавьте своё
+  зеркало или прокси в `/etc/matrix-deploy/deployment.yml`, например:
+
+  ```yaml
+  matrix_registry_proxy: "http://user:password@proxy.example:3128"
+  # или/и свои зеркала (полностью заменяют список по умолчанию):
+  matrix_registry_mirrors:
+    docker.io: [mirror.gcr.io, dockerhub.timeweb.cloud]
+    ghcr.io: [ghcr.nju.edu.cn, ghcr.m.daocloud.io]
+  ```
+
+  и запустите `matrix-deploy converge --admin-password`.
 - **Повторный `./bootstrap.sh`** на уже настроенном сервере намеренно
   отклоняется: он перезаписал бы топологию и обновил бы версии без backup.
   Используйте `matrix-deploy converge`.

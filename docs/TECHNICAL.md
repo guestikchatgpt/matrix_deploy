@@ -81,6 +81,58 @@ lock сохраняется. При первом deploy или явном `upgra
 разрешить/проверить версии является ошибкой: развёртывание не должно начинаться с
 непроверенным набором образов.
 
+## Источники образов: digest, fallback и зеркала
+
+Реестры бывают недоступны: `ghcr.io` и GitHub API могут отвечать таймаутами
+(фильтрация, троттлинг), Docker Hub — сбоить или ограничивать анонимные
+запросы. Поэтому каждый образ адресуется по **manifest digest**, а для
+получения есть цепочка источников.
+
+**Preflight / resolver** (`tools/resolve_versions.py`, `tools/registry.py`):
+
+- версия берётся из GitHub Releases; если GitHub API недоступен, из списка
+  тегов в реестре (upstream → официальный альтернативный → зеркала) с тем же
+  stable-regex и `min_version`. PostgreSQL: metadata Docker Official Images →
+  Docker Hub API → теги в реестре;
+- для выбранного тега вычисляется digest (`sha256` сырого manifest index) и
+  проверяется наличие платформы хоста. Доверенные источники — upstream-реестр и
+  официальные альтернативные (`alternate_images` в `versions.yml`, например Ketesa
+  на Docker Hub с тем же digest). Публичному зеркалу по отдельности не
+  доверяем: без доступного upstream digest принимается, только если его
+  подтвердили **два независимых зеркала**;
+- в lock записываются `digest` и `digest_source`. У старых lock без digest
+  обычный converge дописывает digest для **уже зафиксированных** версий, не меняя
+  их (`LOCK_DIGESTS_ADDED`; так же поступает preflight в `check.sh`);
+- кросс-проверка через Docker Hub API фатальна только при определённом ответе
+  («тега нет»); сетевой сбой — предупреждение;
+- HTTP-запросы и skopeo повторяются с паузами.
+
+**Скачивание** (`tools/pull_images.py`, роль `docker`): для каждого компонента
+`docker pull <источник>@<digest>` по очереди из upstream, официального
+альтернативного реестра и зеркал, с таймаутом (`matrix_image_pull_timeout`) и
+повторами; затем `docker tag` в каноничную ссылку, с которой стартуют
+контейнеры, и проверка, что у образа нужный digest. Docker сверяет содержимое с
+digest, поэтому зеркало не может подменить образ. Образ, уже присутствующий
+локально с нужным digest, не скачивается. Если в lock нет digest, зеркала не
+используются.
+
+**Настройка** (`group_vars/all/main.yml`, переопределяется в
+`/etc/matrix-deploy/deployment.yml`):
+
+```yaml
+matrix_registry_mirrors:        # зеркала по upstream-реестру, только host[:port]
+  docker.io: [mirror.gcr.io, dockerhub.timeweb.cloud]
+  ghcr.io: [ghcr.nju.edu.cn, ghcr.m.daocloud.io]
+matrix_registry_proxy: ""       # например http://user:pass@proxy:3128
+matrix_image_pull_timeout: 900
+```
+
+`matrix_registry_proxy` применяется к dockerd (systemd drop-in
+`docker.service.d/http-proxy.conf`) и к preflight. Открытые публичные
+HTTP-прокси по умолчанию не используются: они нестабильны и видят весь трафик;
+свой прокси задаётся явно. Доступность публичных зеркал для реальных образов
+CI проверяет информационным шагом «Probe public registry mirrors».
+
 ## Bootstrap и launcher
 
 `bootstrap.sh`:
