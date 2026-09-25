@@ -30,4 +30,12 @@
       - "{{ synad_root }}/config.json:/var/public/config.json:ro"
     env:
       SERVER_HOST: '0.0.0.0'
+    # The image's own healthcheck probes http://localhost:8080; with the
+    # IPv4-only bind above, "localhost" may resolve to ::1 inside the
+    # container and report a working instance as unhealthy.
+    healthcheck:
+      test: [CMD, wget, --no-verbose, --tries=1, --spider, 'http://127.0.0.1:8080/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
     state: started
