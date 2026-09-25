@@ -104,4 +104,11 @@ IFS='|' read -r dir args _ < "${work}/bootstrap.calls"
 second_update="$(bash "$src/scripts/update-source.sh")"
 [[ "$second_update" == *'Already on latest'* ]] || fail 'second update was not a no-op'
 
+# 6. A git-clone installation is never replaced by a release bundle.
+mkdir -p "$src/.git"
+if bash "$src/scripts/update-source.sh" >/dev/null 2>&1; then
+  fail 'update-source.sh replaced a git clone'
+fi
+rmdir "$src/.git"
+
 printf 'installer smoke tests: OK\n'

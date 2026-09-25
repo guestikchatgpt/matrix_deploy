@@ -13,6 +13,9 @@ log() { printf '[matrix-deploy] %s\n' "$*"; }
 fatal() { printf '[matrix-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 
 [[ ${EUID} -eq 0 ]] || fatal "matrix-deploy update must run as root."
+if [[ -d "${SOURCE_DIR}/.git" ]]; then
+  fatal "${SOURCE_DIR} is a git clone. Update it with 'git -C ${SOURCE_DIR} pull', then run 'matrix-deploy converge'."
+fi
 
 json="$(curl -fsSL --retry 3 --connect-timeout 15 "${API_ROOT}/repos/${REPO}/releases/latest")" \
   || fatal "Unable to resolve latest stable release."

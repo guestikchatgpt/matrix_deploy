@@ -69,7 +69,13 @@ if [[ "$MODE" == install ]]; then
     fi
     mv "${INSTALLED_SOURCE}.new" "$INSTALLED_SOURCE"
   fi
-  printf '%s\n' "${MATRIX_DEPLOY_RELEASE_TAG:-unknown}" > "$RELEASE_MARKER"
+  release="${MATRIX_DEPLOY_RELEASE_TAG:-}"
+  if [[ -z "$release" ]] && command -v git >/dev/null 2>&1 && \
+     git -C "$INSTALLED_SOURCE" rev-parse --short HEAD >/dev/null 2>&1; then
+    # Installed from a git clone rather than a release bundle.
+    release="git-$(git -C "$INSTALLED_SOURCE" rev-parse --short HEAD)"
+  fi
+  printf '%s\n' "${release:-unknown}" > "$RELEASE_MARKER"
   install -m 0755 "${INSTALLED_SOURCE}/scripts/matrix-deploy" "$CLI_PATH"
   log "CLI установлен: ${CLI_PATH}"
   if [[ "${MATRIX_DEPLOY_NONINTERACTIVE:-0}" == "1" ]]; then

@@ -80,6 +80,8 @@ lock сохраняется. При первом deploy или явном `upgra
 
 ## Первое развёртывание
 
+> **Пошаговая инструкция для сервера под root (Ubuntu 24.04): [`docs/INSTALL.md`](docs/INSTALL.md).**
+
 Предполагаемая схема работы — Ansible с локальным контроллером: всё выполняется
 непосредственно на целевом сервере.
 
@@ -95,9 +97,10 @@ curl -fsSL https://raw.githubusercontent.com/guestikchatgpt/matrix_deploy/main/i
 Либо из git-клона:
 
 ```bash
-git clone https://github.com/guestikchatgpt/matrix_deploy.git
-cd matrix_deploy
-sudo ./bootstrap.sh
+apt-get install -y git
+git clone https://github.com/guestikchatgpt/matrix_deploy.git /opt/matrix-deploy/source
+cd /opt/matrix-deploy/source
+./bootstrap.sh --install
 ```
 
 `bootstrap.sh`:
