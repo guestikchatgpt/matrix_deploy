@@ -1,0 +1,94 @@
+---
+# Upstream version-resolution policy.
+# Exact deployable image tags are resolved at preflight time and written to
+# /etc/matrix-deploy/versions.yml. Routine converge uses that lock unchanged;
+# upgrade.sh explicitly refreshes it before applying an upgrade.
+#
+# Stable-only invariant:
+# - GitHub releases must be neither draft nor prerelease;
+# - every GitHub-backed component additionally accepts only exact vX.Y.Z tags;
+# - suffixes such as rc, -rc.N, beta, alpha, preview, dev, nightly, etc. are
+#   therefore rejected even if upstream accidentally marks such a release as
+#   non-prerelease in GitHub metadata;
+# - PostgreSQL accepts only exact numeric tags inside the configured major, so
+#   Docker Official Image tags such as 19beta2 are ignored.
+# CI contains explicit regression examples for the prerelease schemes observed
+# upstream (Synapse vX.Y.ZrcN, Element Web -rc.N, Element Call -rcN/-rc.N).
+
+matrix_version_lock_file: /etc/matrix-deploy/versions.yml
+matrix_refresh_versions: false
+
+# PostgreSQL major upgrades are intentionally NOT automatic. The resolver picks
+# the latest published stable patch release within this major and verifies that
+# the corresponding Docker Official Image tag exists.
+postgresql_major: "18"
+
+matrix_version_sources:
+  postgresql:
+    resolver: postgresql_dockerhub
+    image: postgres
+    output_image_var: postgresql_image
+    output_version_var: postgresql_release
+    github_metadata_url: https://raw.githubusercontent.com/docker-library/official-images/master/library/postgres
+    dockerhub_namespace: library
+    dockerhub_repository: postgres
+
+  synapse:
+    resolver: github_release
+    github_repo: element-hq/synapse
+    release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+    tag_transform: identity
+    image: matrixdotorg/synapse
+    output_image_var: synapse_image
+    output_version_var: synapse_version
+    dockerhub_namespace: matrixdotorg
+    dockerhub_repository: synapse
+
+  element_web:
+    resolver: github_release
+    github_repo: element-hq/element-web
+    release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+    tag_transform: identity
+    image: vectorim/element-web
+    output_image_var: element_web_image
+    output_version_var: element_web_version
+    dockerhub_namespace: vectorim
+    dockerhub_repository: element-web
+
+  element_call:
+    resolver: github_release
+    github_repo: element-hq/element-call
+    release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+    tag_transform: identity
+    image: ghcr.io/element-hq/element-call
+    output_image_var: element_call_image
+    output_version_var: element_call_version
+
+  livekit:
+    resolver: github_release
+    github_repo: livekit/livekit
+    release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+    tag_transform: identity
+    image: livekit/livekit-server
+    output_image_var: livekit_image
+    output_version_var: livekit_version
+    dockerhub_namespace: livekit
+    dockerhub_repository: livekit-server
+
+  element_jwt:
+    resolver: github_release
+    github_repo: element-hq/lk-jwt-service
+    release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+    tag_transform: strip_v
+    image: ghcr.io/element-hq/lk-jwt-service
+    output_image_var: element_jwt_image
+    output_version_var: element_jwt_version
+
+  synad:
+    resolver: github_release
+    github_repo: etkecc/ketesa
+    release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+    tag_transform: identity
+    image: ghcr.io/etkecc/ketesa
+    output_image_var: synad_image
+    output_version_var: synad_version

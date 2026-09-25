@@ -21,13 +21,13 @@
     name: element-web
     image: "{{ element_web_image }}"
     restart_policy: always
-    pull: true
+    pull: missing
     networks:
       - name: "{{ docker_network_name }}"
     published_ports:
       - "127.0.0.1:{{ element_web_host_port }}:80"
     volumes:
-      - "{{ element_web_root }}/config.json:/app/config.json"
+      - "{{ element_web_root }}/config.json:/app/config.json:ro"
     env:
       SERVER_NAME: "{{ matrix_domains.synapse }}"
       ELEMENT_WEB_PORT: "80"

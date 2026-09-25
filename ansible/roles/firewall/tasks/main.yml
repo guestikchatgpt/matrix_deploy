@@ -1,69 +1,122 @@
-- name: Установить ufw
+---
+- name: Install UFW
   ansible.builtin.apt:
     name: ufw
     state: present
     update_cache: true
 
-- name: Разрешить SSH
+- name: Allow current SSH port before enabling firewall
   community.general.ufw:
     rule: allow
-    port: "22"
+    port: "{{ matrix_ssh_port | string }}"
     proto: tcp
+    comment: Matrix deploy SSH
 
-- name: Разрешить веб-порты
+- name: Allow HTTP and HTTPS
   community.general.ufw:
     rule: allow
     port: "{{ item }}"
     proto: tcp
+    comment: Matrix web
   loop:
     - "80"
     - "443"
-    - "8448"
 
-- name: Разрешить порты TURN TCP
+- name: Allow Matrix federation port
   community.general.ufw:
     rule: allow
-    port: "{{ item }}"
+    port: "8448"
     proto: tcp
+    comment: Matrix federation
+  when: synapse_enable_federation | bool
+
+- name: Remove federation rule when federation is disabled
+  community.general.ufw:
+    rule: allow
+    port: "8448"
+    proto: tcp
+    delete: true
+  when: not synapse_enable_federation | bool
+
+- name: Allow legacy Coturn TCP listeners
+  community.general.ufw:
+    rule: allow
+    port: "{{ item | string }}"
+    proto: tcp
+    comment: Matrix legacy TURN
   loop:
     - "{{ coturn_udp_port }}"
     - "{{ coturn_tls_port }}"
-    - "{{ livekit_turn_tls_port }}"
 
-- name: Разрешить порты TURN UDP
+- name: Allow legacy Coturn UDP listeners
   community.general.ufw:
     rule: allow
-    port: "{{ item }}"
+    port: "{{ item | string }}"
     proto: udp
+    comment: Matrix legacy TURN
   loop:
     - "{{ coturn_udp_port }}"
     - "{{ coturn_tls_port }}"
-    - "{{ livekit_turn_udp_port }}"
 
-- name: Разрешить порты LiveKit TCP
-  community.general.ufw:
-    rule: allow
-    port: "{{ item }}"
-    proto: tcp
-  loop:
-    - "{{ livekit_http_port }}"
-    - "{{ livekit_ws_port }}"
-    - "{{ livekit_rtc_tcp_port }}"
-
-- name: Разрешить диапазон реле TURN
+- name: Allow legacy Coturn relay range
   community.general.ufw:
     rule: allow
     port: "{{ coturn_min_port }}:{{ coturn_max_port }}"
     proto: udp
+    comment: Matrix legacy TURN relay
 
-- name: Разрешить диапазон LiveKit SFU
+- name: Allow LiveKit RTC TCP
+  community.general.ufw:
+    rule: allow
+    port: "{{ livekit_rtc_tcp_port | string }}"
+    proto: tcp
+    comment: MatrixRTC LiveKit TCP
+
+- name: Allow LiveKit embedded TURN UDP
+  community.general.ufw:
+    rule: allow
+    port: "{{ livekit_turn_udp_port | string }}"
+    proto: udp
+    comment: MatrixRTC LiveKit TURN UDP
+
+- name: Allow LiveKit embedded TURN TLS
+  community.general.ufw:
+    rule: allow
+    port: "{{ livekit_turn_tls_port | string }}"
+    proto: tcp
+    comment: MatrixRTC LiveKit TURN TLS
+
+- name: Allow LiveKit ICE media range
   community.general.ufw:
     rule: allow
     port: "{{ livekit_port_range_start }}:{{ livekit_port_range_end }}"
     proto: udp
+    comment: MatrixRTC LiveKit ICE
 
-- name: Включить UFW с политикой deny incoming
+- name: Allow LiveKit embedded TURN relay range
+  community.general.ufw:
+    rule: allow
+    port: "{{ livekit_turn_relay_range_start }}:{{ livekit_turn_relay_range_end }}"
+    proto: udp
+    comment: MatrixRTC LiveKit TURN relay
+
+- name: Remove obsolete public LiveKit HTTP API rule
+  community.general.ufw:
+    rule: allow
+    port: "{{ livekit_http_port | string }}"
+    proto: tcp
+    delete: true
+
+- name: Set default incoming policy to deny
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+
+- name: Set default outgoing policy to allow
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+
+- name: Enable UFW
   community.general.ufw:
     state: enabled
-    policy: deny
-    direction: incoming

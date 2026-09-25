@@ -2,9 +2,9 @@
 - name: Проверить поддержку репозитория Docker для текущего дистрибутива
   ansible.builtin.assert:
     that:
-      - ansible_distribution == "Ubuntu"
-      - ansible_distribution_release in ["noble", "jammy", "focal"]
-    fail_msg: "Официальный репозиторий Docker не поддерживает {{ ansible_distribution }} {{ ansible_distribution_release }}. Проверьте https://docs.docker.com/engine/install/ и при необходимости обновите плейбук."
+      - ansible_facts['distribution'] == "Ubuntu"
+      - ansible_facts['distribution_release'] == "noble"
+    fail_msg: "Matrix Deploy поддерживает Docker deployment только на Ubuntu 24.04 LTS (noble)."
 
 - name: Создать директорию для ключей apt
   ansible.builtin.file:
@@ -18,10 +18,25 @@
     dest: /etc/apt/keyrings/docker.asc
     mode: "0644"
 
+- name: Remove legacy Docker apt source format
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/docker.list
+    state: absent
+
 - name: Добавить репозиторий Docker
-  ansible.builtin.apt_repository:
-    repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
-    filename: docker
+  ansible.builtin.deb822_repository:
+    name: docker
+    types:
+      - deb
+    uris:
+      - https://download.docker.com/linux/ubuntu
+    suites:
+      - "{{ ansible_facts['distribution_release'] }}"
+    components:
+      - stable
+    architectures:
+      - "{{ matrix_deb_arch }}"
+    signed_by: /etc/apt/keyrings/docker.asc
     state: present
 
 - name: Установить Docker Engine
@@ -41,11 +56,33 @@
     state: started
     enabled: true
 
-- name: Добавить пользователя Matrix в группу docker
+- name: Require resolved application image lock
+  ansible.builtin.assert:
+    that:
+      - matrix_resolved_images is defined
+      - matrix_resolved_images is sequence
+      - matrix_resolved_images | length == matrix_version_sources | length
+      - matrix_resolved_images | select('search', ':latest$') | list | length == 0
+    fail_msg: >-
+      Exact application image references are missing. Run Matrix Deploy preflight
+      so /etc/matrix-deploy/versions.yml is resolved before the Docker role.
+
+- name: Pre-pull exact images selected by preflight
+  community.docker.docker_image_pull:
+    name: "{{ item }}"
+    pull: not_present
+    platform: "linux/{{ matrix_deb_arch }}"
+    timeout: 180
+  loop: "{{ matrix_resolved_images }}"
+  loop_control:
+    label: "{{ item }}"
+  when: not ansible_check_mode
+
+- name: Ensure Matrix service account has no supplementary groups
   ansible.builtin.user:
     name: "{{ matrix_system_user }}"
-    groups: docker
-    append: true
+    groups: ''
+    append: false
 
 - name: Создать docker сеть
   community.docker.docker_network:
@@ -53,3 +90,4 @@
     state: present
     ipam_config:
       - subnet: "{{ docker_network_subnet }}"
+        gateway: "{{ docker_network_gateway }}"

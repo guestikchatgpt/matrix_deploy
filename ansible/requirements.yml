@@ -1,6 +1,10 @@
-
 ---
+# Versions are pinned to make controller behavior reproducible. The bootstrap
+# workflow will install a compatible ansible-core before installing these.
 collections:
   - name: community.docker
+    version: "5.2.1"
   - name: community.postgresql
+    version: "4.2.0"
   - name: community.general
+    version: "13.2.0"

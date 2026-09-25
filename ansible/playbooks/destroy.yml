@@ -1,0 +1,158 @@
+---
+- name: Destroy Matrix deployment after an external backup/confirmation gate
+  hosts: matrix_hosts
+  become: true
+  gather_facts: false
+
+  vars:
+    matrix_managed_containers:
+      - element-jwt
+      - livekit
+      - element-call
+      - synad
+      - element-web
+      - synapse
+      - postgres
+
+  tasks:
+    - name: Remove Matrix Docker containers
+      community.docker.docker_container:
+        name: "{{ item }}"
+        state: absent
+        keep_volumes: false
+      loop: "{{ matrix_managed_containers }}"
+      failed_when: false
+
+    - name: Remove Matrix Docker network
+      community.docker.docker_network:
+        name: "{{ docker_network_name }}"
+        state: absent
+      failed_when: false
+
+    - name: Stop and disable legacy Coturn
+      ansible.builtin.systemd:
+        name: coturn
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Remove Matrix Nginx configuration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/nginx/conf.d/10-matrix.conf
+        - /etc/nginx/conf.d/00-matrix-bootstrap.conf
+      register: matrix_destroy_nginx
+
+    - name: Validate remaining Nginx configuration
+      ansible.builtin.command: nginx -t
+      changed_when: false
+      when: matrix_destroy_nginx.changed
+
+    - name: Reload Nginx after Matrix configuration removal
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+      when: matrix_destroy_nginx.changed
+
+    - name: Remove Matrix Certbot deploy hook
+      ansible.builtin.file:
+        path: /etc/letsencrypt/renewal-hooks/deploy/matrix-stack.sh
+        state: absent
+
+    - name: Remove Matrix SAN certificate lineage
+      ansible.builtin.command:
+        argv:
+          - certbot
+          - delete
+          - --non-interactive
+          - --cert-name
+          - "{{ matrix_domains.synapse }}"
+      register: matrix_destroy_main_cert
+      changed_when: matrix_destroy_main_cert.rc == 0
+      failed_when: false
+
+    - name: Remove legacy TURN certificate lineage
+      ansible.builtin.command:
+        argv:
+          - certbot
+          - delete
+          - --non-interactive
+          - --cert-name
+          - "{{ matrix_domains.turn }}"
+      register: matrix_destroy_turn_cert
+      changed_when: matrix_destroy_turn_cert.rc == 0
+      failed_when: false
+
+    - name: Remove legacy Coturn managed state
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/turnserver.conf
+        - /etc/turnserver/certs
+
+    - name: Remove managed Fail2ban jail
+      ansible.builtin.file:
+        path: /etc/fail2ban/jail.d/00-matrix-base.local
+        state: absent
+      register: matrix_destroy_fail2ban
+
+    - name: Restart Fail2ban after managed jail removal
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: restarted
+      when: matrix_destroy_fail2ban.changed
+      failed_when: false
+
+    - name: Remove Matrix-specific UFW rules
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        delete: true
+      loop:
+        - { port: '8448', proto: tcp }
+        - { port: "{{ coturn_udp_port }}", proto: tcp }
+        - { port: "{{ coturn_udp_port }}", proto: udp }
+        - { port: "{{ coturn_tls_port }}", proto: tcp }
+        - { port: "{{ coturn_tls_port }}", proto: udp }
+        - { port: "{{ coturn_min_port }}:{{ coturn_max_port }}", proto: udp }
+        - { port: "{{ livekit_rtc_tcp_port }}", proto: tcp }
+        - { port: "{{ livekit_turn_udp_port }}", proto: udp }
+        - { port: "{{ livekit_turn_tls_port }}", proto: tcp }
+        - { port: "{{ livekit_port_range_start }}:{{ livekit_port_range_end }}", proto: udp }
+        - { port: "{{ livekit_turn_relay_range_start }}:{{ livekit_turn_relay_range_end }}", proto: udp }
+      failed_when: false
+
+    - name: Remove Matrix application state
+      ansible.builtin.file:
+        path: "{{ matrix_root_dir }}"
+        state: absent
+
+    - name: Remove Matrix webroot
+      ansible.builtin.file:
+        path: "{{ nginx_sites_root }}"
+        state: absent
+
+    - name: Remove installed verifier
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/sbin/matrix-stack-verify
+        - /usr/local/bin/matrix-stack-verify.sh
+
+    - name: Remove persisted deployment configuration last
+      ansible.builtin.file:
+        path: /etc/matrix-deploy
+        state: absent
+
+    - name: Destroy summary
+      ansible.builtin.debug:
+        msg:
+          - 'Matrix application state removed.'
+          - 'Backups under /var/backups/matrix-deploy were preserved.'
+          - 'System packages (Docker, Nginx, PostgreSQL image cache, UFW, Fail2ban, Certbot) were preserved.'
+          - 'Generic HTTP/HTTPS and SSH firewall rules were preserved.'

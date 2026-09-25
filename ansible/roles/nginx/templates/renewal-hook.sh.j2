@@ -7,41 +7,80 @@ log() {
   logger -t "$logger_tag" "$1"
 }
 
-log "Certificate renewal hook started"
-
-if systemctl is-active --quiet nginx; then
-  log "Reloading nginx"
-  systemctl reload nginx
-else
-  log "nginx is not active, skipping reload"
-fi
-
-if [ -d /etc/turnserver/certs ]; then
-  log "Refreshing TURN certificates copy"
-  cp "/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem" /etc/turnserver/certs/fullchain.pem
-  cp "/etc/letsencrypt/live/{{ matrix_domains.turn }}/privkey.pem" /etc/turnserver/certs/privkey.pem
-  chown turnserver:turnserver /etc/turnserver/certs/fullchain.pem /etc/turnserver/certs/privkey.pem
-  chmod 0640 /etc/turnserver/certs/fullchain.pem /etc/turnserver/certs/privkey.pem
-else
-  log "TURN certs directory missing, skipping copy"
-fi
-
-if systemctl is-enabled --quiet coturn 2>/dev/null; then
-  log "Restarting coturn to pick up renewed certificates"
-  systemctl restart coturn
-else
-  log "coturn is not enabled, skipping restart"
-fi
-
-if command -v docker &> /dev/null; then
-  if [ -n "$(docker ps -q -f name=^livekit$)" ]; then
-    log "Restarting LiveKit container to pick up renewed certificates"
-    docker restart livekit
+reload_nginx() {
+  if systemctl is-active --quiet nginx; then
+    log "Reloading nginx"
+    systemctl reload nginx
   else
-    log "LiveKit container is not running, skipping restart"
+    log "nginx is not active, skipping reload"
   fi
-else
-  log "Docker command not found, skipping container restarts"
-fi
+}
 
-log "Certificate renewal hook finished successfully"
+refresh_coturn() {
+  if [ ! -d /etc/turnserver/certs ]; then
+    log "TURN cert directory missing, skipping coturn certificate refresh"
+    return
+  fi
+
+  log "Refreshing coturn certificate copy"
+  install -o turnserver -g turnserver -m 0640 \
+    "/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem" \
+    /etc/turnserver/certs/fullchain.pem
+  install -o turnserver -g turnserver -m 0600 \
+    "/etc/letsencrypt/live/{{ matrix_domains.turn }}/privkey.pem" \
+    /etc/turnserver/certs/privkey.pem
+
+  if systemctl is-enabled --quiet coturn 2>/dev/null; then
+    log "Restarting coturn"
+    systemctl restart coturn
+  else
+    log "coturn is not enabled, skipping restart"
+  fi
+}
+
+refresh_livekit() {
+  if [ ! -d "{{ livekit_cert_dir }}" ]; then
+    log "LiveKit cert directory missing, skipping certificate refresh"
+    return
+  fi
+
+  log "Refreshing LiveKit TURN certificate copy"
+  install -o root -g root -m 0644 \
+    "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem" \
+    "{{ livekit_cert_dir }}/turn.crt"
+  install -o root -g root -m 0600 \
+    "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem" \
+    "{{ livekit_cert_dir }}/turn.key"
+
+  if command -v docker >/dev/null 2>&1 && \
+     [ -n "$(docker ps -q -f name=^livekit$)" ]; then
+    log "Restarting LiveKit"
+    docker restart livekit >/dev/null
+  else
+    log "LiveKit is not running, skipping restart"
+  fi
+}
+
+lineage="${RENEWED_LINEAGE:-}"
+log "Certificate deploy hook started; lineage=${lineage:-manual}"
+
+case "$lineage" in
+  "/etc/letsencrypt/live/{{ matrix_domains.synapse }}")
+    reload_nginx
+    refresh_livekit
+    ;;
+  "/etc/letsencrypt/live/{{ matrix_domains.turn }}")
+    refresh_coturn
+    ;;
+  "")
+    log "Manual invocation: refreshing both certificate contours"
+    reload_nginx
+    refresh_coturn
+    refresh_livekit
+    ;;
+  *)
+    log "Unknown lineage $lineage; no service-specific action required"
+    ;;
+esac
+
+log "Certificate deploy hook finished successfully"

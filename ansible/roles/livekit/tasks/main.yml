@@ -1,36 +1,70 @@
 ---
-- name: Создать директорию LiveKit
+- name: Create LiveKit directories
   ansible.builtin.file:
-    path: "{{ livekit_root }}"
+    path: "{{ item.path }}"
     state: directory
-    owner: "{{ matrix_system_user }}"
-    group: "{{ matrix_system_group }}"
-    mode: "0750"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ livekit_root }}", mode: '0750' }
+    - { path: "{{ livekit_cert_dir }}", mode: '0700' }
 
-- name: Сформировать конфигурацию LiveKit
+- name: Copy Matrix SAN certificate for LiveKit embedded TURN
+  ansible.builtin.copy:
+    src: "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem"
+    dest: "{{ livekit_cert_dir }}/turn.crt"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart LiveKit
+
+- name: Copy Matrix SAN private key for LiveKit embedded TURN
+  ansible.builtin.copy:
+    src: "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem"
+    dest: "{{ livekit_cert_dir }}/turn.key"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Restart LiveKit
+
+- name: Render LiveKit configuration
   ansible.builtin.template:
     src: livekit.yaml.j2
     dest: "{{ livekit_config_path }}"
-    owner: "{{ matrix_system_user }}"
-    group: "{{ matrix_system_group }}"
-    mode: "0640"
+    owner: root
+    group: root
+    mode: '0600'
   notify: Restart LiveKit
 
-- name: Развернуть контейнер LiveKit
+- name: Run LiveKit container
   community.docker.docker_container:
     name: livekit
     image: "{{ livekit_image }}"
     restart_policy: always
-    pull: true
+    pull: missing
     network_mode: host
-    user: "0"
+    user: '0'
     command:
-      - "--config"
-      - "/etc/livekit.yaml"
+      - --config
+      - /etc/livekit.yaml
     volumes:
       - "{{ livekit_config_path }}:/etc/livekit.yaml:ro"
-      - "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/fullchain.pem:/etc/ssl/livekit/turn.crt:ro"
-      - "/etc/letsencrypt/live/{{ matrix_domains.synapse }}/privkey.pem:/etc/ssl/livekit/turn.key:ro"
-    env:
-      LIVEKIT_KEYS: "{{ livekit_api_key }}: {{ livekit_api_secret }}"
+      - "{{ livekit_cert_dir }}:/etc/ssl/livekit:ro"
     state: started
+
+- name: Apply LiveKit configuration changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for LiveKit API
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ livekit_http_port }}/"
+    status_code: 200
+    timeout: 5
+  register: livekit_ready
+  retries: 20
+  delay: 2
+  until: livekit_ready.status | default(0) == 200
+  when: not ansible_check_mode

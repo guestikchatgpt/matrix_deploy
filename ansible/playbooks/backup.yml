@@ -1,0 +1,171 @@
+---
+- name: Back up Matrix deployment state
+  hosts: matrix_hosts
+  become: true
+  gather_facts: true
+
+  vars:
+    matrix_backup_root: /var/backups/matrix-deploy
+    matrix_backup_id: "{{ ansible_facts['date_time']['iso8601_basic_short'] }}"
+    matrix_backup_dir: "{{ matrix_backup_root }}/{{ matrix_backup_id }}"
+    matrix_backup_include_media: false
+    matrix_backup_version_lock: /etc/matrix-deploy/versions.yml
+    matrix_backup_candidates:
+      - /etc/matrix-deploy
+      - "{{ matrix_root_dir }}/.secrets"
+      - "{{ synapse_data_dir }}/homeserver.yaml"
+      - "{{ synapse_data_dir }}/log.config"
+      - "{{ synapse_data_dir }}/{{ matrix_domains.synapse }}.signing.key"
+      - "{{ synapse_app_service_dir }}"
+      - "{{ element_web_root }}"
+      - "{{ synad_root }}"
+      - "{{ element_call_root }}"
+      - "{{ livekit_config_path }}"
+      - "{{ livekit_cert_dir }}"
+      - /etc/nginx/conf.d/10-matrix.conf
+      - /etc/nginx/conf.d/00-matrix-bootstrap.conf
+      - /etc/turnserver.conf
+      - /etc/turnserver/certs
+      - /etc/fail2ban/jail.d/00-matrix-base.local
+      - /etc/letsencrypt
+
+  tasks:
+    - name: Create protected backup directory
+      ansible.builtin.file:
+        path: "{{ matrix_backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Check runtime version lock before backup
+      ansible.builtin.stat:
+        path: "{{ matrix_backup_version_lock }}"
+      register: matrix_backup_version_lock_stat
+
+    - name: Calculate runtime version lock SHA-256
+      ansible.builtin.command:
+        argv:
+          - sha256sum
+          - "{{ matrix_backup_version_lock }}"
+      register: matrix_backup_version_lock_sha
+      changed_when: false
+      when: matrix_backup_version_lock_stat.stat.exists
+
+    - name: Check PostgreSQL container state before logical backup
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - postgres
+          - --format
+          - "{% raw %}{{.State.Running}}{% endraw %}"
+      register: matrix_backup_postgres_state
+      changed_when: false
+      failed_when: false
+
+    - name: Require running PostgreSQL for a restorable database backup
+      ansible.builtin.assert:
+        that:
+          - matrix_backup_postgres_state.rc == 0
+          - matrix_backup_postgres_state.stdout | trim == 'true'
+        fail_msg: >-
+          PostgreSQL container is not running, so a consistent logical Matrix
+          database backup cannot be created. Recover/start PostgreSQL before
+          destructive or upgrade operations.
+
+    - name: Create PostgreSQL logical backup
+      ansible.builtin.shell: >-
+        set -o pipefail &&
+        docker exec postgres
+        pg_dump -U {{ postgresql_synapse_user | quote }}
+        -d {{ postgresql_synapse_db | quote }}
+        -Fc > {{ (matrix_backup_dir ~ '/synapse.pgdump') | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Build backup candidate list
+      ansible.builtin.set_fact:
+        matrix_backup_candidate_paths: >-
+          {{ matrix_backup_candidates +
+             ([synapse_media_store] if matrix_backup_include_media | bool else []) }}
+
+    - name: Check backup candidate paths
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ matrix_backup_candidate_paths }}"
+      register: matrix_backup_candidate_stats
+
+    - name: Build existing backup path list
+      ansible.builtin.set_fact:
+        matrix_backup_existing_paths: >-
+          {{ (matrix_backup_existing_paths | default([])) + [item.item] }}
+      loop: "{{ matrix_backup_candidate_stats.results }}"
+      when: item.stat.exists
+
+    - name: Archive Matrix configuration and secrets
+      ansible.builtin.command:
+        argv: "{{ ['tar', '-czf', matrix_backup_dir ~ '/config-state.tar.gz'] + (matrix_backup_existing_paths | default([])) }}"
+      changed_when: true
+
+    - name: Capture Docker container state
+      ansible.builtin.shell: |
+        ids="$(docker ps -aq)"
+        if [ -n "$ids" ]; then
+          docker inspect $ids
+        else
+          printf '[]\n'
+        fi > {{ (matrix_backup_dir ~ '/docker-inspect.json') | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Capture Docker image inventory
+      ansible.builtin.shell: >-
+        docker images --digests --no-trunc > {{ (matrix_backup_dir ~ '/docker-images.txt') | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Capture UFW state
+      ansible.builtin.shell: >-
+        ufw status numbered > {{ (matrix_backup_dir ~ '/ufw-status.txt') | quote }}
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Protect backup artifacts that may contain secrets
+      ansible.builtin.file:
+        path: "{{ matrix_backup_dir }}/{{ item }}"
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        - synapse.pgdump
+        - config-state.tar.gz
+        - docker-inspect.json
+        - docker-images.txt
+        - ufw-status.txt
+
+    - name: Write backup manifest
+      ansible.builtin.copy:
+        dest: "{{ matrix_backup_dir }}/MANIFEST.txt"
+        owner: root
+        group: root
+        mode: '0600'
+        content: |
+          Matrix Deploy backup
+          created_utc={{ ansible_facts['date_time']['iso8601'] }}
+          server_name={{ matrix_domains.synapse }}
+          public_ipv4={{ matrix_external_ip }}
+          database={{ postgresql_synapse_db }}
+          media_store_included={{ matrix_backup_include_media | bool | lower }}
+          postgres_data_directory_included=false
+          version_lock_present={{ matrix_backup_version_lock_stat.stat.exists | bool | lower }}
+          version_lock_sha256={{ (matrix_backup_version_lock_sha.stdout.split()[0] if matrix_backup_version_lock_stat.stat.exists else 'missing') }}
+          restore_requires_explicit_operator_action=true
+
+    - name: Show backup location
+      ansible.builtin.debug:
+        msg: "Matrix backup created at {{ matrix_backup_dir }}"

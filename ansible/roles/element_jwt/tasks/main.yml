@@ -1,27 +1,32 @@
 ---
-- name: Создать директорию для Element JWT
-  ansible.builtin.file:
-    path: "{{ element_jwt_root }}"
-    state: directory
-    owner: "{{ matrix_system_user }}"
-    group: "{{ matrix_system_group }}"
-    mode: "0750"
-
-- name: Запустить сервис Element JWT
+- name: Run MatrixRTC authorization service
   community.docker.docker_container:
     name: element-jwt
     image: "{{ element_jwt_image }}"
     restart_policy: always
-    pull: true
+    pull: missing
     networks:
       - name: "{{ docker_network_name }}"
     published_ports:
-      - "127.0.0.1:{{ element_jwt_port }}:8080"
+      - "127.0.0.1:{{ element_jwt_host_port }}:8080"
     env:
       LIVEKIT_URL: "wss://{{ matrix_domains.livekit }}/livekit/sfu"
       LIVEKIT_KEY: "{{ livekit_api_key }}"
       LIVEKIT_SECRET: "{{ livekit_api_secret }}"
-      LIVEKIT_JWT_PORT: "8080"
-      LIVEKIT_FULL_ACCESS_HOMESERVERS: "{{ element_jwt_full_access_homeservers | join(',') }}"
+      LIVEKIT_JWT_BIND: "{{ element_jwt_bind }}"
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: >-
+        {{ ([matrix_domains.synapse] + matrix_local_homeserver_aliases) | unique | join(',') }}
+      LIVEKIT_LOG_LEVEL: info
     state: started
-  register: element_jwt_container
+  no_log: true
+
+- name: Wait for MatrixRTC authorization service
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ element_jwt_host_port }}/healthz"
+    status_code: 200
+    timeout: 5
+  register: element_jwt_ready
+  retries: 20
+  delay: 2
+  until: element_jwt_ready.status | default(0) == 200
+  when: not ansible_check_mode

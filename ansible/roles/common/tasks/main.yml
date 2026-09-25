@@ -1,11 +1,11 @@
 ---
 - name: Обновить кеш apt
-  apt:
+  ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 86400
 
 - name: Установить базовые пакеты
-  apt:
+  ansible.builtin.apt:
     name:
       - ca-certificates
       - curl
@@ -15,22 +15,22 @@
       - python3-pip
       - python3-venv
       - python3-psycopg2
-      - software-properties-common
+      - python3-debian
       - acl
       - openssl
 
-- name: Установить Python SDK Docker из официального PyPI
+- name: Установить Python SDK Docker
   ansible.builtin.apt:
     name: python3-docker
-    state: latest
+    state: present
 
 - name: Создать системную группу Matrix
-  group:
+  ansible.builtin.group:
     name: "{{ matrix_system_group }}"
     system: true
 
 - name: Создать системного пользователя Matrix
-  user:
+  ansible.builtin.user:
     name: "{{ matrix_system_user }}"
     group: "{{ matrix_system_group }}"
     shell: /usr/sbin/nologin
@@ -38,7 +38,7 @@
     create_home: false
 
 - name: Создать корневую директорию стека
-  file:
+  ansible.builtin.file:
     path: "{{ matrix_root_dir }}"
     state: directory
     owner: "{{ matrix_system_user }}"
@@ -46,31 +46,20 @@
     mode: "0750"
 
 - name: Создать директорию для секретов
-  file:
+  ansible.builtin.file:
     path: "{{ matrix_root_dir }}/.secrets"
     state: directory
-    owner: "{{ matrix_system_user }}"
-    group: "{{ matrix_system_group }}"
+    owner: root
+    group: root
     mode: "0700"
 
-- name: Запомнить ресурсы хоста
-  set_fact:
-    matrix_total_memory_mb: "{{ ansible_memtotal_mb | int }}"
-    matrix_total_vcpus: "{{ (ansible_processor_vcpus | default(ansible_processor_count | default(2))) | int }}"
+- name: Map host architecture to Debian repository architecture
+  ansible.builtin.set_fact:
+    matrix_deb_arch: >-
+      {{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] | default('') }}
 
-- name: Рассчитать параметры PostgreSQL
-  set_fact:
-    postgresql_tuning:
-      shared_buffers_mb: "{{ [[((matrix_total_memory_mb | int) * 0.25) | int, 8192] | min, 1024] | max }}"
-      effective_cache_size_mb: "{{ [((matrix_total_memory_mb | int) * 0.75) | int, 2048] | max }}"
-      maintenance_work_mem_mb: "{{ [((matrix_total_memory_mb | int) * 0.05) | int, 256] | max }}"
-      work_mem_mb: "{{ [(((matrix_total_memory_mb | int) - (((matrix_total_memory_mb | int) * 0.25) | int)) / ((matrix_total_vcpus | int | default(2)) * 6)) | int, 8] | max }}"
-      max_connections: "{{ [[((matrix_total_vcpus | int | default(2)) * 100), 800] | min, 200] | max }}"
-
-- name: Вывести подсказку по ресурсам
-  debug:
-    msg:
-      - "RAM: {{ matrix_total_memory_mb }} МБ"
-      - "vCPU: {{ matrix_total_vcpus }}"
-      - "PostgreSQL shared_buffers: {{ postgresql_tuning.shared_buffers_mb }} МБ"
-      - "PostgreSQL work_mem: {{ postgresql_tuning.work_mem_mb }} МБ"
+- name: Require a supported CPU architecture
+  ansible.builtin.assert:
+    that:
+      - matrix_deb_arch | length > 0
+    fail_msg: "Unsupported architecture for Matrix Deploy: {{ ansible_facts['architecture'] }}"

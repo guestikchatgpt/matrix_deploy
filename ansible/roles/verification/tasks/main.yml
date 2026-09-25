@@ -1,22 +1,95 @@
-﻿---
-- name: Развернуть скрипт проверки стека
+---
+- name: Require resolved version lock variables for verification
+  ansible.builtin.assert:
+    that:
+      - postgresql_image is defined
+      - synapse_image is defined
+      - element_web_image is defined
+      - synad_image is defined
+      - element_call_image is defined
+      - element_jwt_image is defined
+      - livekit_image is defined
+    fail_msg: >-
+      Verification requires the resolved application version lock. Use verify.sh
+      or pass /etc/matrix-deploy/versions.yml as extra vars.
+
+- name: Install Matrix stack verifier
   ansible.builtin.template:
     src: verify.sh.j2
-    dest: /usr/local/bin/matrix-stack-verify.sh
+    dest: /usr/local/sbin/matrix-stack-verify
     owner: root
     group: root
-    mode: "0755"
+    mode: '0755'
 
-- name: Запустить проверочный скрипт
-  ansible.builtin.command: /usr/local/bin/matrix-stack-verify.sh
+- name: Keep legacy verifier path as compatibility symlink
+  ansible.builtin.file:
+    src: /usr/local/sbin/matrix-stack-verify
+    dest: /usr/local/bin/matrix-stack-verify.sh
+    state: link
+    force: true
+
+- name: Validate verifier shell syntax
+  ansible.builtin.command: bash -n /usr/local/sbin/matrix-stack-verify
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Run final Matrix stack verification
+  ansible.builtin.command: /usr/local/sbin/matrix-stack-verify
   register: verification_run
   changed_when: false
+  failed_when: false
+  environment:
+    TERM: dumb
+  when: not ansible_check_mode
 
-- name: Вывести результат проверки
+- name: Show Matrix verification output
   ansible.builtin.debug:
-    msg: "{{ verification_run.stdout }}"
+    msg: "{{ verification_run.stdout_lines | default([]) }}"
+  when: not ansible_check_mode
 
-- name: В случае ошибки выдать вывод stderr
+- name: Show Matrix verification stderr
   ansible.builtin.debug:
-    msg: "{{ verification_run.stderr }}"
-  when: verification_run.rc != 0
+    msg: "{{ verification_run.stderr_lines | default([]) }}"
+  when:
+    - not ansible_check_mode
+    - verification_run.stderr | default('') | length > 0
+
+- name: Require final Matrix verification success
+  ansible.builtin.assert:
+    that:
+      - verification_run.rc == 0
+    fail_msg: 'Matrix stack verification failed. Review the output above.'
+  when: not ansible_check_mode
+
+- name: Run Certbot renewal dry-run with deploy hooks
+  ansible.builtin.command:
+    argv:
+      - certbot
+      - renew
+      - --dry-run
+      - --run-deploy-hooks
+  register: verification_certbot_dry_run
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+  tags:
+    - never
+    - deep_verify
+
+- name: Show Certbot dry-run output
+  ansible.builtin.debug:
+    msg: "{{ verification_certbot_dry_run.stdout_lines | default([]) }}"
+  when: not ansible_check_mode
+  tags:
+    - never
+    - deep_verify
+
+- name: Require Certbot dry-run success
+  ansible.builtin.assert:
+    that:
+      - verification_certbot_dry_run.rc == 0
+    fail_msg: 'Certbot renewal dry-run failed. Review the output above.'
+  when: not ansible_check_mode
+  tags:
+    - never
+    - deep_verify

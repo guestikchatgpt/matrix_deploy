@@ -1,0 +1,16 @@
+# Runtime secrets and generated state
+.secrets/
+**/.secrets/
+*.retry
+
+# Local Ansible/operator state
+.ansible/
+*.log
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Bootstrap Python environment
+.venv/

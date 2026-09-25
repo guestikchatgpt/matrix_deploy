@@ -1,31 +1,33 @@
 ---
-- name: Создать директорию Synad
+- name: Create Ketesa configuration directory
   ansible.builtin.file:
     path: "{{ synad_root }}"
     state: directory
     owner: "{{ matrix_system_user }}"
     group: "{{ matrix_system_group }}"
-    mode: "0750"
+    mode: '0750'
 
-- name: Создать конфигурацию Synad
+- name: Render Ketesa configuration
   ansible.builtin.template:
     src: config.json.j2
     dest: "{{ synad_root }}/config.json"
     owner: "{{ matrix_system_user }}"
     group: "{{ matrix_system_group }}"
-    mode: "0640"
-  notify: Restart Synad
+    mode: '0644'
+  notify: Restart Ketesa
 
-- name: Развернуть контейнер Synad
+- name: Run Ketesa container
   community.docker.docker_container:
     name: synad
     image: "{{ synad_image }}"
     restart_policy: always
-    pull: true
+    pull: missing
     networks:
       - name: "{{ docker_network_name }}"
     published_ports:
       - "127.0.0.1:{{ synad_host_port }}:8080"
     volumes:
-      - "{{ synad_root }}/config.json:/app/public/config.json:ro"
+      - "{{ synad_root }}/config.json:/var/public/config.json:ro"
+    env:
+      SERVER_HOST: '0.0.0.0'
     state: started
