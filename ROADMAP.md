@@ -10,7 +10,7 @@
 - Повторный запуск playbook должен быть безопасным.
 - Системный Coturn для классических звонков и встроенный TURN LiveKit — отдельные, намеренно независимые TURN-стеки; объединять их нельзя.
 - HTTP/API-порт LiveKit 7880 должен оставаться внутренним; публичной HTTPS-точкой входа является Nginx.
-- Федерация — реальный feature flag и должна последовательно управлять Synapse, Nginx, UFW, well-known данными и verification.
+- Федерация — реальный feature flag и должна последовательно управлять Synapse, Nginx, UFW и verification. Исключение: `.well-known/matrix/server` публикуется всегда, потому что через него lk-jwt-service находит OpenID-эндпоинт для MatrixRTC.
 - Секреты не должны попадать в Git.
 - Перед destructive-операциями и обновлениями существующая установка должна резервироваться.
 - Обычный converge не должен незаметно обновлять application images.
@@ -23,7 +23,7 @@
 2. Перевести lk-jwt-service на безопасную модель конфигурации:
    - использовать `LIVEKIT_JWT_BIND` вместо deprecated-конфигурации порта;
    - явно задавать `LIVEKIT_FULL_ACCESS_HOMESERVERS`;
-   - не добавлять неподдерживаемую конфигурацию webhook.
+   - webhook LiveKit -> lk-jwt-service `/sfu_webhook` добавлять только с версии, где он есть в релизе (lk-jwt-service >= 0.7.0; добавлено 2026-09-25).
 3. Сохранить `LiveKit room.auto_create=false`.
 4. Явно задать relay range встроенного TURN LiveKit: 63000-63999/udp.
 5. Сохранить диапазон media LiveKit RTC 62000-62999/udp и TCP fallback 7881/tcp.
@@ -82,6 +82,9 @@
 
 ## LiveKit / MatrixRTC
 
+- Discovery транспорта (с 2026-09): основной путь — эндпоинт хоумсервера `GET /_matrix/client/unstable/org.matrix.msc4143/rtc/transports` (MSC4519) из `matrix_rtc.transports` в `homeserver.yaml`; `.well-known` `org.matrix.msc4143.rtc_foci` — только deprecated fallback для клиентов (Element Call v0.24.0).
+- `matrix_rtc.transports[].livekit_service_url` deprecated с Synapse 1.161.0, но обязателен для обратной совместимости. Новое свойство `url` включать только вместе с режимом application service у lk-jwt-service (MSC4195/MSC4512) — upstream пока помечает его experimental.
+- lk-jwt-service проверяет OpenID-токены через `/_matrix/federation/v1/openid/userinfo`, находя хоумсервер через `.well-known/matrix/server` (иначе `:8448`). Поэтому при выключенной федерации нужны listener `openid` и `m.server` в `.well-known/matrix/server`.
 - `room.auto_create=false`.
 - `LIVEKIT_FULL_ACCESS_HOMESERVERS` должен содержать только локальное Matrix server name и необходимые локальные domain aliases.
 - Встроенный TURN: 3480/udp, 5449/tcp, relay 63000-63999/udp.
@@ -190,6 +193,8 @@ Bootstrap остаётся orchestration UX; логика Matrix-сервисо�
 - [x] Установка одной командой из stable GitHub Release (`install.sh`, проверка SHA-256, `bootstrap.sh --install`) и CLI `matrix-deploy` поверх converge/upgrade/verify/check/backup/destroy; `matrix-deploy update` с откатом при неудачной подготовке нового релиза.
 - [x] Повторный `deploy.sh` поверх существующей установки отклоняется (нет скрытого перезаписывания топологии и обновления lock без backup).
 - [x] При отключённой федерации Synapse блокирует и исходящую федерацию (`federation_domain_whitelist: []`); verifier не требует метрик при `synapse_enable_metrics=false`.
+- [x] MatrixRTC приведён к актуальной модели upstream (2026-09-25): discovery через `rtc/transports` хоумсервера, `.well-known` как fallback; OpenID для lk-jwt-service работает и при выключенной федерации; LiveKit webhook -> `/sfu_webhook` для delegated leave; конфиги Element Web/Element Call/Ketesa по текущим схемам; verifier проверяет transports, OpenID и webhook.
+- [x] `min_version` в политике версий: resolver не выбирает версии ниже проверенных, converge отказывается применять конфиг к более старому lock (нужен `upgrade.sh`).
 
 ### Намеренно отложено до integration testing
 

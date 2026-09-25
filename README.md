@@ -61,6 +61,13 @@
 Явное обновление выполняется через `upgrade.sh`: сначала backup, затем refresh
 lock-файла, затем converge с новым exact-набором.
 
+Для каждого компонента в политике задан `min_version` — минимальный stable-релиз,
+на котором проверена текущая конфигурация (это не пин). Resolver никогда не
+выберет версию ниже, а обычный `converge.sh` откажется применять конфигурацию к
+lock со старыми версиями и попросит выполнить `upgrade.sh`. Текущие минимумы
+(2026-09-25): Synapse v1.161.0, Element Web v1.12.29, Element Call v0.26.0,
+LiveKit v1.13.7, lk-jwt-service 0.7.0, Ketesa v1.5.0, PostgreSQL 18.6.
+
 PostgreSQL является специальным случаем: его major задаётся политикой
 `postgresql_major` и автоматически не повышается. Resolver выбирает только
 последний stable release внутри разрешённого major. Смена major PostgreSQL —
@@ -374,6 +381,36 @@ Deploy hook Certbot учитывает конкретную lineage:
 
 LiveKit использует стабильную копию сертификата в `/opt/matrix/livekit/certs`, а
 не bind mount отдельных файлов-целей symlink из Let's Encrypt.
+
+## MatrixRTC: как клиенты находят LiveKit
+
+Актуальная модель upstream (проверено 2026-09-25 по документации Element Call,
+Synapse 1.161.0 и lk-jwt-service 0.7.0):
+
+- **Основной путь** — хоумсервер. `homeserver.yaml` содержит
+  `matrix_rtc.transports`, а `experimental_features.msc4143_enabled` включает
+  эндпоинт `GET /_matrix/client/unstable/org.matrix.msc4143/rtc/transports`
+  (MSC4519, требует токен). Начиная с Element Call v0.24.0 discovery через
+  `.well-known` объявлен устаревшим.
+- **Fallback** — `org.matrix.msc4143.rtc_foci` в `/.well-known/matrix/client`
+  сохраняется для клиентов, которые ещё читают его (Element-клиенты оставили его
+  как запасной путь; Synapse сам этот ключ не генерирует).
+- `livekit_service_url` в `matrix_rtc.transports` устарел в Synapse 1.161.0,
+  но upstream требует оставлять его для совместимости. Новое свойство `url`
+  подразумевает lk-jwt-service в режиме application service (MSC4195/MSC4512),
+  который upstream пока называет экспериментальным, поэтому оно не включено.
+- lk-jwt-service проверяет OpenID-токены пользователей через
+  `/_matrix/federation/v1/openid/userinfo`, находя хоумсервер через
+  `/.well-known/matrix/server`. Поэтому при выключенной федерации Synapse
+  включает listener-ресурс `openid`, а `.well-known/matrix/server` по-прежнему
+  указывает на `:443`; сама федерация остаётся выключенной
+  (`federation_domain_whitelist: []`, ресурса `federation` нет, 8448 закрыт).
+- LiveKit отправляет события участников на `http://127.0.0.1:8084/sfu_webhook`
+  lk-jwt-service (delegated delayed leave, MSC4140); дополнительно включена
+  pull-проверка `LIVEKIT_SANITY_CHECK_INTERVAL_SECONDS=60`.
+
+Verifier проверяет все звенья: transports-эндпоинт (401 без токена = включён),
+OpenID userinfo, `.well-known` fallback и webhook.
 
 ## Endpoint Synapse Admin
 

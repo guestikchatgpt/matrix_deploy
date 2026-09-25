@@ -17,6 +17,8 @@
       LIVEKIT_FULL_ACCESS_HOMESERVERS: >-
         {{ ([matrix_domains.synapse] + matrix_local_homeserver_aliases) | unique | join(',') }}
       LIVEKIT_LOG_LEVEL: info
+      # Pull-based fallback for missed SFU webhooks (delegated leave).
+      LIVEKIT_SANITY_CHECK_INTERVAL_SECONDS: "{{ element_jwt_sanity_check_interval_seconds | string }}"
     state: started
   no_log: true
 

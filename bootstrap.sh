@@ -8,7 +8,7 @@ set -euo pipefail
 #                                  ${MATRIX_DEPLOY_INSTALL_ROOT}/source, install the
 #                                  matrix-deploy CLI and continue from the installed copy
 
-readonly ANSIBLE_CORE_VERSION="2.21.2"
+readonly ANSIBLE_CORE_VERSION="2.21.4"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly VENV_DIR="${REPO_ROOT}/.venv"
 readonly INSTALL_ROOT="${MATRIX_DEPLOY_INSTALL_ROOT:-/opt/matrix-deploy}"

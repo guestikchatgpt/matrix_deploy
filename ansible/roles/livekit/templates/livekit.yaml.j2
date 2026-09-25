@@ -28,6 +28,14 @@ turn:
   cert_file: /etc/ssl/livekit/turn.crt
   key_file: /etc/ssl/livekit/turn.key
 
+# Participant lifecycle events for lk-jwt-service delegated delayed leave
+# (MSC4140). Delivered over loopback; signed with the same API key that
+# lk-jwt-service uses (LIVEKIT_KEY), which is required for verification.
+webhook:
+  api_key: "{{ livekit_api_key }}"
+  urls:
+    - "http://127.0.0.1:{{ element_jwt_host_port }}/sfu_webhook"
+
 room:
   enable_remote_unmute: false
   auto_create: {{ livekit_room_auto_create | bool | lower }}

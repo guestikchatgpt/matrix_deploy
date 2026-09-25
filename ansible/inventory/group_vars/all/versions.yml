@@ -23,8 +23,19 @@ matrix_refresh_versions: false
 # the corresponding Docker Official Image tag exists.
 postgresql_major: "18"
 
+# min_version is the oldest stable release the rendered configuration is
+# verified against (not a pin): the resolver refuses to select anything older,
+# and routine converge refuses a lock below it (run upgrade.sh). Raise it only
+# when the playbook starts relying on newer upstream behaviour. Current floors
+# were verified on 2026-09-25:
+# - Synapse v1.161.0: matrix_rtc.livekit_service_url deprecation/`url` model.
+# - Element Web v1.12.29: config schema without element_call.url/livekit keys.
+# - Element Call v0.26.0: matrix_rtc_session.delayed_leave.* key rename.
+# - lk-jwt-service 0.7.0: /sfu_webhook delegated leave, Rust rewrite.
+# - LiveKit v1.13.7, Ketesa v1.5.0, PostgreSQL 18.6: latest stable releases.
 matrix_version_sources:
   postgresql:
+    min_version: '18.6'
     resolver: postgresql_dockerhub
     image: postgres
     output_image_var: postgresql_image
@@ -34,6 +45,7 @@ matrix_version_sources:
     dockerhub_repository: postgres
 
   synapse:
+    min_version: 'v1.161.0'
     resolver: github_release
     github_repo: element-hq/synapse
     release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
@@ -45,6 +57,7 @@ matrix_version_sources:
     dockerhub_repository: synapse
 
   element_web:
+    min_version: 'v1.12.29'
     resolver: github_release
     github_repo: element-hq/element-web
     release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
@@ -56,6 +69,7 @@ matrix_version_sources:
     dockerhub_repository: element-web
 
   element_call:
+    min_version: 'v0.26.0'
     resolver: github_release
     github_repo: element-hq/element-call
     release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
@@ -65,6 +79,7 @@ matrix_version_sources:
     output_version_var: element_call_version
 
   livekit:
+    min_version: 'v1.13.7'
     resolver: github_release
     github_repo: livekit/livekit
     release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
@@ -76,6 +91,7 @@ matrix_version_sources:
     dockerhub_repository: livekit-server
 
   element_jwt:
+    min_version: 'v0.7.0'
     resolver: github_release
     github_repo: element-hq/lk-jwt-service
     release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
@@ -85,6 +101,7 @@ matrix_version_sources:
     output_version_var: element_jwt_version
 
   synad:
+    min_version: 'v1.5.0'
     resolver: github_release
     github_repo: etkecc/ketesa
     release_regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'

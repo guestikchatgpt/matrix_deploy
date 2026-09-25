@@ -10,6 +10,11 @@ listeners:
           - client
 {% if synapse_enable_federation | bool %}
           - federation
+{% else %}
+          # lk-jwt-service validates MatrixRTC OpenID tokens via
+          # /_matrix/federation/v1/openid/userinfo; `federation` implies
+          # `openid`, so without federation it must be enabled explicitly.
+          - openid
 {% endif %}
         compress: false
 {% if synapse_enable_metrics | bool %}
@@ -38,7 +43,8 @@ database:
 log_config: "/data/log.config"
 media_store_path: "/data/media"
 report_stats: {{ synapse_report_stats | bool | lower }}
-use_presence: {{ synapse_use_presence | bool | lower }}
+presence:
+  enabled: {{ synapse_use_presence | bool | lower }}
 enable_search: {{ synapse_enable_search | bool | lower }}
 allow_guest_access: false
 
@@ -123,6 +129,16 @@ media_retention:
   local_media_lifetime: null
   remote_media_lifetime: null
 
+# MatrixRTC transport discovery (MSC4519): clients query
+# /_matrix/client/unstable/org.matrix.msc4143/rtc/transports (enabled by
+# experimental_features.msc4143_enabled). Since Element Call v0.24.0 this is the
+# primary discovery method; .well-known org.matrix.msc4143.rtc_foci is only a
+# deprecated client fallback.
+#
+# livekit_service_url is deprecated since Synapse 1.161.0 but must stay listed
+# for clients that talk to lk-jwt-service directly. The new `url` property is
+# only valid when lk-jwt-service runs as an application service (MSC4195/
+# MSC4512), which upstream still marks experimental; it is therefore not set.
 matrix_rtc:
   transports:
     - type: livekit

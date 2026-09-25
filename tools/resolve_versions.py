@@ -72,6 +72,40 @@ def github_latest_release(repo: str, release_regex: str | None) -> tuple[str, st
     return tag, str(data.get("html_url") or f"https://github.com/{repo}/releases/tag/{tag}")
 
 
+def version_tuple(version: str) -> tuple[int, ...]:
+    """Numeric key of a stable version such as v1.161.0, 0.7.0 or 18.6."""
+    match = re.fullmatch(r"v?(\d+(?:\.\d+)*)", str(version).strip())
+    if not match:
+        raise ResolveError(f"not a stable numeric version: {version!r}")
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def below_minimum(version: str, minimum: str) -> bool:
+    return version_tuple(version) < version_tuple(minimum)
+
+
+def minimum_violations(
+    policy: dict[str, Any], components: dict[str, Any]
+) -> list[str]:
+    """Components whose version is missing or older than the policy floor."""
+    violations: list[str] = []
+    for name, source in policy.get("matrix_version_sources", {}).items():
+        minimum = source.get("min_version") if isinstance(source, dict) else None
+        if not minimum:
+            continue
+        item = components.get(name) if isinstance(components, dict) else None
+        version = str(item.get("version", "")) if isinstance(item, dict) else ""
+        if not version:
+            violations.append(f"{name}: missing (requires >= {minimum})")
+            continue
+        try:
+            if below_minimum(version, str(minimum)):
+                violations.append(f"{name}: {version} < required {minimum}")
+        except ResolveError as exc:
+            violations.append(f"{name}: {exc}")
+    return violations
+
+
 def transform_release_tag(tag: str, transform: str) -> str:
     if transform == "identity":
         return tag
@@ -256,6 +290,13 @@ def resolve(policy: dict[str, Any], arch: str) -> dict[str, Any]:
         else:
             raise ResolveError(f"unsupported resolver {resolver!r} for {name}")
 
+        minimum = source.get("min_version")
+        if minimum and below_minimum(str(component["version"]), str(minimum)):
+            raise ResolveError(
+                f"{name}: latest stable upstream release {component['version']} is older "
+                f"than the verified minimum {minimum}"
+            )
+
         skopeo_verify(str(component["image"]), arch)
         components[str(name)] = component
         resolved_images.append(str(component["image"]))
@@ -352,6 +393,18 @@ def main() -> int:
         raise ResolveError(f"version lock is missing: {args.lock}")
 
     current = load_yaml(args.lock)
+    lock_meta = current.get("matrix_version_lock")
+    current_components = lock_meta.get("components", {}) if isinstance(lock_meta, dict) else {}
+    violations = minimum_violations(policy, current_components)
+    if violations:
+        # Fail closed: the rendered configuration requires these versions, so a
+        # routine converge must not apply it to older locked images.
+        raise ResolveError(
+            "locked versions are older than this playbook supports: "
+            + "; ".join(violations)
+            + ". Run upgrade.sh (backup + lock refresh) before converging."
+        )
+
     try:
         latest = resolve(policy, arch)
     except ResolveError as exc:

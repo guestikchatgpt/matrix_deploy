@@ -47,6 +47,10 @@ patterns = {
     r"\belement_jwt_port\b": "Removed JWT variable reintroduced",
     r":latest(?:[\"']|\s|$)": "Moving :latest image reference reintroduced",
     r"ansible\.builtin\.apt_repository\b": "Deprecated apt_repository module reintroduced",
+    r"delayed_leave_event_(?:delay|restart)": "Element Call <0.26 matrix_rtc_session key reintroduced (use delayed_leave.*)",
+    r"feature_use_device_session_member_events": "Removed Element Call feature flag reintroduced",
+    r"\buse_presence:": "Deprecated Synapse use_presence reintroduced (use presence.enabled)",
+    r"\"homeserverUrl\"": "Old synapse-admin config key reintroduced (Ketesa uses restrictBaseUrl)",
     r"\bansible_(?:distribution|distribution_version|distribution_release|effective_user_id|memtotal_mb|processor_vcpus|processor_count|mounts|architecture|date_time)\b": (
         "Deprecated top-level injected Ansible fact reintroduced; use ansible_facts[...]"
     ),
@@ -183,6 +187,21 @@ if isinstance(version_policy, dict):
                 output_vars.add(output_var)
 
             resolver = str(raw_source.get("resolver", ""))
+            min_version = str(raw_source.get("min_version", "")).strip()
+            if not min_version:
+                errors.append(f"Version source {name!r} is missing min_version")
+            elif resolver == "postgresql_dockerhub":
+                if not re.fullmatch(rf"{re.escape(postgresql_major)}\.\d+", min_version):
+                    errors.append(
+                        f"PostgreSQL min_version {min_version!r} must be a stable "
+                        f"{postgresql_major}.N release inside postgresql_major"
+                    )
+            elif not re.fullmatch(str(raw_source.get("release_regex", "")), min_version):
+                errors.append(
+                    f"Version source {name!r} min_version {min_version!r} is not a "
+                    "stable tag accepted by its release_regex"
+                )
+
             if resolver not in {"github_release", "postgresql_dockerhub"}:
                 errors.append(f"Unsupported resolver in version policy for {name!r}: {resolver!r}")
 

@@ -118,6 +118,7 @@ livekit_turn_relay_range_end: 63999
 livekit_room_auto_create: false
 
 element_jwt_bind: ":8080"
+element_jwt_sanity_check_interval_seconds: 60
 
 # Nginx / ACME
 nginx_sites_root: /var/www/matrix

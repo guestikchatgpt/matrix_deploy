@@ -238,12 +238,45 @@ assert d["m.homeserver"]["base_url"] == "https://{{ matrix_domains.synapse }}"
 foci = d.get("org.matrix.msc4143.rtc_foci", [])
 assert any(x.get("type") == "livekit" and x.get("livekit_service_url") == "https://{{ matrix_domains.livekit }}/livekit/jwt" for x in foci)
 ' >/dev/null 2>&1; then
-    ok 'MatrixRTC discovery корректен'
+    ok 'MatrixRTC .well-known fallback (rtc_foci, deprecated) корректен'
 else
-    fail 'MatrixRTC discovery некорректен'
+    fail 'MatrixRTC .well-known fallback (rtc_foci) некорректен'
+fi
+
+# MSC4519 transports endpoint (primary discovery since Element Call v0.24.0).
+# It requires authentication: 401 proves the route is enabled, while 404
+# (M_UNRECOGNIZED) means msc4143_enabled/matrix_rtc is not in effect.
+RTC_TRANSPORTS_CODE="$(curl -4sk --max-time 10 "${CURL_LOCAL_RESOLVE[@]}" -o /dev/null -w '%{http_code}' https://{{ matrix_domains.synapse }}/_matrix/client/unstable/org.matrix.msc4143/rtc/transports)"
+if [ "$RTC_TRANSPORTS_CODE" = '401' ]; then
+    ok 'MatrixRTC transports endpoint (MSC4519) включён'
+else
+    fail "MatrixRTC transports endpoint (MSC4519): HTTP $RTC_TRANSPORTS_CODE, ожидался 401"
+fi
+# lk-jwt-service validates OpenID tokens here in both federation modes.
+OPENID_CODE="$(curl -4sk --max-time 10 "${CURL_LOCAL_RESOLVE[@]}" -o /dev/null -w '%{http_code}' 'https://{{ matrix_domains.synapse }}/_matrix/federation/v1/openid/userinfo?access_token=matrix-verify-invalid')"
+if [ "$OPENID_CODE" = '401' ]; then
+    ok 'OpenID userinfo для lk-jwt-service доступен'
+else
+    fail "OpenID userinfo для lk-jwt-service: HTTP $OPENID_CODE, ожидался 401"
 fi
 
 section 'LiveKit configuration'
+if grep -Eq '^[[:space:]]*-[[:space:]]*"?http://127\.0\.0\.1:{{ element_jwt_host_port }}/sfu_webhook"?[[:space:]]*$' '{{ livekit_config_path }}'; then
+    ok 'LiveKit webhook -> lk-jwt-service /sfu_webhook'
+else
+    fail 'LiveKit webhook на lk-jwt-service /sfu_webhook не настроен'
+fi
+JWT_WEBHOOK_CODE="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:{{ element_jwt_host_port }}/sfu_webhook)"
+case "$JWT_WEBHOOK_CODE" in
+    4??)
+        if [ "$JWT_WEBHOOK_CODE" = '404' ]; then
+            fail 'lk-jwt-service не обслуживает /sfu_webhook (HTTP 404)'
+        else
+            ok "lk-jwt-service /sfu_webhook отвечает (неподписанный запрос отклонён: HTTP $JWT_WEBHOOK_CODE)"
+        fi
+        ;;
+    *) fail "lk-jwt-service /sfu_webhook: HTTP $JWT_WEBHOOK_CODE" ;;
+esac
 if grep -Eq '^[[:space:]]*auto_create:[[:space:]]*false' '{{ livekit_config_path }}'; then
     ok 'room.auto_create=false'
 else
