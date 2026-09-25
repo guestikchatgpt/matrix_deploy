@@ -176,6 +176,18 @@ if isinstance(version_policy, dict):
                         f"Version source {name!r} must contain an untagged image repository: {image!r}"
                     )
 
+            alternates = raw_source.get("alternate_images", []) or []
+            if not isinstance(alternates, list):
+                errors.append(f"Version source {name!r}: alternate_images must be a list")
+            else:
+                for alternate in alternates:
+                    alt = str(alternate)
+                    if ":" in alt.rsplit("/", 1)[-1] or "@" in alt or "/" not in alt:
+                        errors.append(
+                            f"Version source {name!r}: alternate image {alt!r} must be an "
+                            "untagged registry/repository reference"
+                        )
+
             output_var = str(raw_source.get("output_image_var", "")).strip()
             if not output_var.endswith("_image"):
                 errors.append(
@@ -248,6 +260,26 @@ if isinstance(version_policy, dict):
                 errors.append("PostgreSQL must keep the postgresql_dockerhub resolver")
 else:
     errors.append("Version policy YAML root must be a mapping")
+
+# Registry mirrors are bare hostnames keyed by upstream registry; digest
+# pinning in tools/pull_images.py relies on host-only rewriting.
+main_vars_path = ROOT / "ansible/inventory/group_vars/all/main.yml"
+try:
+    main_vars = yaml.safe_load(main_vars_path.read_text(encoding="utf-8")) or {}
+except Exception as exc:  # noqa: BLE001
+    errors.append(f"Cannot parse group_vars main.yml: {exc}")
+    main_vars = {}
+mirrors = main_vars.get("matrix_registry_mirrors", {})
+if not isinstance(mirrors, dict):
+    errors.append("matrix_registry_mirrors must be a mapping of registry -> [mirror hosts]")
+else:
+    for upstream, hosts in mirrors.items():
+        if not isinstance(hosts, list):
+            errors.append(f"matrix_registry_mirrors[{upstream!r}] must be a list")
+            continue
+        for host in hosts:
+            if not re.fullmatch(r"[A-Za-z0-9.-]+(?::\d+)?", str(host)):
+                errors.append(f"Registry mirror must be a bare host[:port]: {host!r}")
 
 # Avoid the SIGPIPE false-negative class already observed with pipefail. Shell
 # code should capture producer output first, then grep a here-string/file.

@@ -11,11 +11,15 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from typing import Any
 
 import yaml
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import registry  # noqa: E402
 
 USER_AGENT = "matrix-deploy-version-resolver/1"
 GITHUB_API_VERSION = "2022-11-28"
@@ -37,14 +41,27 @@ def http_request(url: str, *, github: bool = False) -> bytes:
             headers["Authorization"] = f"Bearer {token}"
 
     request = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return response.read()
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[:500]
-        raise ResolveError(f"HTTP {exc.code} for {url}: {body}") from exc
-    except urllib.error.URLError as exc:
-        raise ResolveError(f"request failed for {url}: {exc.reason}") from exc
+    attempts = 3
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")[:500]
+            # Client errors are definitive answers; retry only throttling and
+            # server-side failures.
+            if exc.code < 500 and exc.code != 429 or attempt == attempts:
+                raise ResolveError(f"HTTP {exc.code} for {url}: {body}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if attempt == attempts:
+                reason = getattr(exc, "reason", exc)
+                raise ResolveError(f"request failed for {url}: {reason}") from exc
+        time.sleep(3 * attempt)
+    raise ResolveError(f"request failed for {url}")
+
+
+def is_not_found(exc: ResolveError) -> bool:
+    return str(exc).startswith("HTTP 404 ")
 
 
 def http_json(url: str, *, github: bool = False) -> dict[str, Any]:
@@ -142,41 +159,128 @@ def dockerhub_tag(namespace: str, repository: str, tag: str, arch: str) -> dict[
     return data
 
 
-def resolve_postgresql(source: dict[str, Any], major: str, arch: str) -> dict[str, Any]:
-    metadata_url = str(source["github_metadata_url"])
-    raw = http_request(metadata_url).decode("utf-8", errors="strict")
+def dockerhub_check(namespace: str, repository: str, tag: str, arch: str) -> None:
+    """Docker Hub API cross-check; only a definitive answer is fatal.
 
-    candidates: set[tuple[int, ...]] = set()
-    exact_tags: dict[tuple[int, ...], str] = {}
-    pattern = re.compile(rf"^{re.escape(major)}\.(\d+(?:\.\d+)*)$")
+    The registry digest lookup is the authoritative existence check, so an
+    unreachable Docker Hub API (network filtering, throttling) only warns.
+    """
+    try:
+        dockerhub_tag(namespace, repository, tag, arch)
+    except ResolveError as exc:
+        if is_not_found(exc) or "lacks linux/" in str(exc) or "unexpected tag" in str(exc):
+            raise
+        print(f"WARNING: Docker Hub API cross-check skipped for {namespace}/{repository}:{tag}: {exc}")
 
-    for line in raw.splitlines():
-        if not line.startswith("Tags:"):
+
+def registry_list_tags(repository: str, *, timeout: int = 60, attempts: int = 2) -> list[str]:
+    last = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            result = subprocess.run(
+                ["skopeo", "list-tags", f"docker://{repository}"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise ResolveError("skopeo is required; run bootstrap.sh first") from exc
+        except subprocess.TimeoutExpired:
+            last = f"timed out after {timeout}s"
+        else:
+            if result.returncode == 0:
+                try:
+                    return [str(tag) for tag in json.loads(result.stdout).get("Tags", [])]
+                except json.JSONDecodeError as exc:
+                    raise ResolveError(f"invalid tag list from {repository}") from exc
+            last = (result.stderr or "").strip()[-300:]
+        if attempt < attempts:
+            time.sleep(3 * attempt)
+    raise ResolveError(f"cannot list tags of {repository}: {last}")
+
+
+def latest_release_from_registries(
+    sources: list[registry.Source], release_regex: str, transform: str
+) -> tuple[str, str]:
+    """Fallback when the GitHub API is unreachable: newest stable tag in a registry.
+
+    The chosen tag is still subject to min_version and to trusted digest
+    resolution, so a mirror advertising a bogus tag cannot get it deployed.
+    """
+    errors = []
+    for source in sources:
+        try:
+            tags = registry_list_tags(source.repository)
+        except ResolveError as exc:
+            errors.append(str(exc))
             continue
-        for token in line.removeprefix("Tags:").split(","):
-            tag = token.strip()
-            match = pattern.fullmatch(tag)
-            if not match:
-                continue
-            version_tuple = tuple(int(part) for part in tag.split("."))
-            candidates.add(version_tuple)
-            exact_tags[version_tuple] = tag
+        releases = []
+        for tag in tags:
+            release = f"v{tag}" if transform == "strip_v" and not tag.startswith("v") else tag
+            if re.fullmatch(release_regex, release):
+                releases.append(release)
+        if releases:
+            best = max(releases, key=version_tuple)
+            return best, f"registry tags of {source.repository}"
+        errors.append(f"{source.repository}: no stable tags")
+    raise ResolveError("no registry reachable for tag listing: " + "; ".join(errors))
 
-    if not candidates:
-        raise ResolveError(
-            f"no stable PostgreSQL {major}.x tags found in Docker Official Images metadata"
-        )
 
-    selected_tuple = max(candidates)
-    selected_tag = exact_tags[selected_tuple]
+def postgresql_tags_from_dockerhub(namespace: str, repository: str, major: str) -> list[str]:
+    url = (
+        "https://hub.docker.com/v2/namespaces/"
+        f"{namespace}/repositories/{repository}/tags?name={major}.&page_size=100"
+    )
+    data = http_json(url)
+    return [str(item.get("name", "")) for item in data.get("results", []) if isinstance(item, dict)]
+
+
+def resolve_postgresql(
+    source: dict[str, Any],
+    major: str,
+    arch: str,
+    sources: list[registry.Source] | None = None,
+) -> dict[str, Any]:
+    metadata_url = str(source["github_metadata_url"])
     namespace = str(source["dockerhub_namespace"])
     repository = str(source["dockerhub_repository"])
-    dockerhub_tag(namespace, repository, selected_tag, arch)
+    pattern = re.compile(rf"^{re.escape(major)}\.(\d+(?:\.\d+)*)$")
+    tags: list[str] = []
+    origin = metadata_url
+
+    try:
+        raw = http_request(metadata_url).decode("utf-8", errors="strict")
+        for line in raw.splitlines():
+            if line.startswith("Tags:"):
+                tags.extend(token.strip() for token in line.removeprefix("Tags:").split(","))
+    except ResolveError as exc:
+        print(f"WARNING: Docker Official Images metadata unreachable ({exc}); trying Docker Hub API")
+        try:
+            tags = postgresql_tags_from_dockerhub(namespace, repository, major)
+            origin = f"hub.docker.com {namespace}/{repository}"
+        except ResolveError as hub_exc:
+            print(f"WARNING: Docker Hub API unreachable ({hub_exc}); trying registry tag lists")
+            for candidate in sources or []:
+                try:
+                    tags = registry_list_tags(candidate.repository)
+                    origin = f"registry tags of {candidate.repository}"
+                    break
+                except ResolveError:
+                    continue
+
+    candidates = {tuple(int(part) for part in tag.split(".")): tag for tag in tags if pattern.fullmatch(tag)}
+    if not candidates:
+        raise ResolveError(f"no stable PostgreSQL {major}.x tags found (last source: {origin})")
+
+    selected_tag = candidates[max(candidates)]
+    dockerhub_check(namespace, repository, selected_tag, arch)
 
     return {
         "version": selected_tag,
         "image": f"{source['image']}:{selected_tag}",
-        "source": metadata_url,
+        "source": origin,
         "release_tag": selected_tag,
     }
 
@@ -236,7 +340,46 @@ def load_yaml(path: pathlib.Path) -> dict[str, Any]:
     return data
 
 
-def resolve(policy: dict[str, Any], arch: str) -> dict[str, Any]:
+def fetch_manifest(reference: str) -> bytes:
+    """Raw manifest fetch; module-level so tests can replace it."""
+    return registry.skopeo_raw_manifest(reference)
+
+
+def image_sources(
+    source: dict[str, Any], image: str, mirrors: dict[str, list[str]] | None
+) -> list[registry.Source]:
+    return registry.candidate_sources(image, source.get("alternate_images") or [], mirrors)
+
+
+def locate_image(
+    name: str,
+    source: dict[str, Any],
+    image: str,
+    arch: str,
+    mirrors: dict[str, list[str]] | None,
+) -> dict[str, str]:
+    """Pin `image` to a manifest digest obtained from a trusted source."""
+    sources = image_sources(source, image, mirrors)
+    try:
+        located = registry.locate_digest(image, sources, fetch=fetch_manifest, log=print)
+    except registry.RegistryError as exc:
+        raise ResolveError(f"{name}: {exc}") from exc
+    if located.platforms is None:
+        skopeo_verify(located.source.pinned(located.digest), arch)
+    elif ("linux", arch) not in located.platforms:
+        raise ResolveError(
+            f"{name}: {image} has no linux/{arch} image; available={sorted(located.platforms)}"
+        )
+    if located.source.kind != "upstream":
+        print(f"  {name}: upstream registry unreachable, digest from {located.source.repository}")
+    return {"digest": located.digest, "digest_source": located.source.repository}
+
+
+def resolve(
+    policy: dict[str, Any],
+    arch: str,
+    mirrors: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
     sources = policy.get("matrix_version_sources")
     if not isinstance(sources, dict) or not sources:
         raise ResolveError("matrix_version_sources is missing from version policy")
@@ -256,25 +399,31 @@ def resolve(policy: dict[str, Any], arch: str) -> dict[str, Any]:
             raise ResolveError(f"version source {name} must be a mapping")
         source = dict(raw_source)
         resolver = str(source.get("resolver", "github_release"))
+        # Sources for tag listing fallbacks (the tag itself is irrelevant here).
+        repo_sources = image_sources(source, f"{source['image']}:latest", mirrors)
 
         if resolver == "postgresql_dockerhub":
-            component = resolve_postgresql(source, postgresql_major, arch)
+            component = resolve_postgresql(source, postgresql_major, arch, repo_sources)
         elif resolver == "github_release":
             repo = str(source["github_repo"])
-            release_tag, release_url = github_latest_release(
-                repo,
-                str(source.get("release_regex", "")) or None,
-            )
-            docker_tag = transform_release_tag(
-                release_tag,
-                str(source.get("tag_transform", "identity")),
-            )
+            release_regex = str(source.get("release_regex", "")) or None
+            transform = str(source.get("tag_transform", "identity"))
+            try:
+                release_tag, release_url = github_latest_release(repo, release_regex)
+            except ResolveError as exc:
+                if not release_regex or "does not match" in str(exc) or "draft/prerelease" in str(exc):
+                    raise
+                print(f"WARNING: GitHub API unavailable for {repo} ({exc}); using registry tags")
+                release_tag, release_url = latest_release_from_registries(
+                    repo_sources, release_regex, transform
+                )
+            docker_tag = transform_release_tag(release_tag, transform)
             image = f"{source['image']}:{docker_tag}"
 
             dockerhub_namespace = source.get("dockerhub_namespace")
             dockerhub_repository = source.get("dockerhub_repository")
             if dockerhub_namespace and dockerhub_repository:
-                dockerhub_tag(
+                dockerhub_check(
                     str(dockerhub_namespace),
                     str(dockerhub_repository),
                     docker_tag,
@@ -297,7 +446,7 @@ def resolve(policy: dict[str, Any], arch: str) -> dict[str, Any]:
                 f"than the verified minimum {minimum}"
             )
 
-        skopeo_verify(str(component["image"]), arch)
+        component.update(locate_image(str(name), source, str(component["image"]), arch, mirrors))
         components[str(name)] = component
         resolved_images.append(str(component["image"]))
 
@@ -320,6 +469,24 @@ def resolve(policy: dict[str, Any], arch: str) -> dict[str, Any]:
         "matrix_resolved_images": resolved_images,
     }
     return lock
+
+
+def add_missing_digests(
+    policy: dict[str, Any],
+    lock: dict[str, Any],
+    arch: str,
+    mirrors: dict[str, list[str]] | None,
+) -> list[str]:
+    """Pin locks written before digests existed; versions stay unchanged."""
+    added = []
+    components = lock.get("matrix_version_lock", {}).get("components", {})
+    for name, source in policy.get("matrix_version_sources", {}).items():
+        item = components.get(name)
+        if not isinstance(item, dict) or item.get("digest"):
+            continue
+        item.update(locate_image(str(name), dict(source), str(item["image"]), arch, mirrors))
+        added.append(f"{name}: {item['image']}@{item['digest']}")
+    return added
 
 
 def write_lock(path: pathlib.Path, data: dict[str, Any]) -> None:
@@ -364,7 +531,8 @@ def print_selected(data: dict[str, Any], *, prefix: str) -> None:
     components = data["matrix_version_lock"]["components"]
     print(prefix)
     for name, item in components.items():
-        print(f"  {name:14s} {item['version']:16s} {item['image']}")
+        digest = str(item.get("digest", ""))[:19]
+        print(f"  {name:14s} {item['version']:16s} {item['image']}  {digest}")
 
 
 def main() -> int:
@@ -374,6 +542,11 @@ def main() -> int:
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--arch", choices=("amd64", "arm64"))
+    parser.add_argument(
+        "--mirrors-json",
+        default="{}",
+        help='registry mirrors per upstream registry, e.g. {"ghcr.io": ["ghcr.nju.edu.cn"]}',
+    )
     args = parser.parse_args()
 
     if args.refresh == args.check:
@@ -381,9 +554,15 @@ def main() -> int:
 
     policy = load_yaml(args.policy)
     arch = args.arch or host_architecture()
+    try:
+        mirrors = json.loads(args.mirrors_json or "{}") or {}
+    except json.JSONDecodeError as exc:
+        raise ResolveError(f"invalid --mirrors-json: {exc}") from exc
+    if not isinstance(mirrors, dict):
+        raise ResolveError("--mirrors-json must be a JSON object")
 
     if args.refresh:
-        latest = resolve(policy, arch)
+        latest = resolve(policy, arch, mirrors)
         write_lock(args.lock, latest)
         print_selected(latest, prefix="Resolved stable versions:")
         print(f"LOCK_UPDATED {args.lock}")
@@ -405,8 +584,22 @@ def main() -> int:
             + ". Run upgrade.sh (backup + lock refresh) before converging."
         )
 
+    # Locks created before digest pinning: add digests for the *locked* images
+    # (no version change) so pulls can safely fall back to mirrors.
     try:
-        latest = resolve(policy, arch)
+        added = add_missing_digests(policy, current, arch, mirrors)
+    except ResolveError as exc:
+        added = []
+        print(f"WARNING: could not pin locked images to digests yet: {exc}")
+    if added:
+        write_lock(args.lock, current)
+        print("Pinned locked images to manifest digests (versions unchanged):")
+        for line in added:
+            print(f"  {line}")
+        print(f"LOCK_DIGESTS_ADDED {args.lock}")
+
+    try:
+        latest = resolve(policy, arch, mirrors)
     except ResolveError as exc:
         print(f"WARNING: upstream version check failed; keeping locked versions: {exc}")
         return 0

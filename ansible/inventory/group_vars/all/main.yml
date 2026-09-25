@@ -42,6 +42,31 @@ matrix_local_homeserver_aliases: []
 docker_network_name: matrix-net
 docker_network_subnet: 172.23.0.0/24
 docker_network_gateway: 172.23.0.1
+# Image sources. Images are pinned by manifest digest in the version lock and
+# pulled from the upstream registry first; if it is unreachable (filtering,
+# throttling), from official alternate registries (see versions.yml) and then
+# from these public pull-through mirrors, keyed by upstream registry host.
+# Digest pinning means a mirror cannot substitute content. Override or extend
+# per deployment in /etc/matrix-deploy/deployment.yml (e.g. a private mirror).
+matrix_registry_mirrors:
+  docker.io:
+    - mirror.gcr.io
+    - dockerhub.timeweb.cloud
+  ghcr.io:
+    - ghcr.nju.edu.cn
+    - ghcr.m.daocloud.io
+# Optional HTTP(S) proxy for registry and upstream-version traffic, e.g.
+# "http://user:password@proxy.example:3128". Used by dockerd (systemd drop-in)
+# and by preflight. Empty = direct connections.
+matrix_registry_proxy: ""
+matrix_registry_no_proxy: "localhost,127.0.0.1,::1"
+matrix_registry_proxy_env: >-
+  {{ {'HTTP_PROXY': matrix_registry_proxy, 'HTTPS_PROXY': matrix_registry_proxy,
+      'NO_PROXY': matrix_registry_no_proxy}
+     if (matrix_registry_proxy | default('') | length) > 0 else {} }}
+# Seconds per docker pull attempt (large images over slow links).
+matrix_image_pull_timeout: 900
+
 docker_container_log_driver: local
 docker_container_log_options:
   max-size: 20m

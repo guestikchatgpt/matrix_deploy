@@ -41,7 +41,7 @@ jobs:
           python -m py_compile tools/resolve_versions.py tools/static_checks.py
 
       - name: Unit-test version resolver policy (offline)
-        run: python -m unittest tests/test_resolve_versions.py -v
+        run: python -m unittest tests/test_resolve_versions.py tests/test_registry_fallback.py -v
 
       - name: Exercise bootstrap preparation on Ubuntu 24.04
         shell: bash
@@ -144,6 +144,33 @@ jobs:
           print(f'{image}: amd64+arm64 OK')
           PY
           done < /tmp/matrix-deploy-images.txt
+
+      - name: Probe public registry mirrors (informational)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo cp /etc/matrix-deploy/versions.yml /tmp/matrix-probe-lock.yml
+          sudo chmod 0644 /tmp/matrix-probe-lock.yml
+          python - <<'PY'
+          import sys, yaml
+          sys.path.insert(0, 'tools')
+          import registry
+          lock = yaml.safe_load(open('/tmp/matrix-probe-lock.yml'))
+          policy = yaml.safe_load(open('ansible/inventory/group_vars/all/versions.yml'))
+          mirrors = yaml.safe_load(open('ansible/inventory/group_vars/all/main.yml'))['matrix_registry_mirrors']
+          for name, item in lock['matrix_version_lock']['components'].items():
+              alternates = policy['matrix_version_sources'][name].get('alternate_images') or []
+              tag = registry.parse_image(item['image']).tag
+              for source in registry.candidate_sources(item['image'], alternates, mirrors)[1:]:
+                  try:
+                      digest = registry.manifest_digest(
+                          registry.skopeo_raw_manifest(source.tagged(tag), timeout=60, attempts=1))
+                      state = 'SAME DIGEST' if digest == item['digest'] else f'DIFFERENT {digest[:19]}'
+                  except registry.RegistryError as exc:
+                      state = f'UNREACHABLE {str(exc)[-120:]}'
+                  print(f'{name:13s} {source.kind:9s} {source.repository:55s} {state}')
+          PY
 
       - name: Show Ansible versions
         working-directory: ansible

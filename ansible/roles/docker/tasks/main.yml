@@ -67,16 +67,74 @@
       Exact application image references are missing. Run Matrix Deploy preflight
       so /etc/matrix-deploy/versions.yml is resolved before the Docker role.
 
+- name: Create dockerd systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: matrix_registry_proxy | length > 0
+
+- name: Configure dockerd HTTP(S) proxy for registry access
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker.service.d/http-proxy.conf
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      # Managed by Matrix Deploy (matrix_registry_proxy)
+      [Service]
+      Environment="HTTP_PROXY={{ matrix_registry_proxy }}"
+      Environment="HTTPS_PROXY={{ matrix_registry_proxy }}"
+      Environment="NO_PROXY={{ matrix_registry_no_proxy }}"
+  register: docker_proxy_dropin_present
+  when: matrix_registry_proxy | length > 0
+  no_log: true
+
+- name: Remove dockerd proxy drop-in when no proxy is configured
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d/http-proxy.conf
+    state: absent
+  register: docker_proxy_dropin_absent
+  when: matrix_registry_proxy | length == 0
+
+- name: Apply dockerd proxy change
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted
+    daemon_reload: true
+  when:
+    - not ansible_check_mode
+    - (docker_proxy_dropin_present is changed) or (docker_proxy_dropin_absent is changed)
+
+# Pulls by manifest digest with fallback: upstream registry -> official
+# alternate registry -> public mirrors (tools/pull_images.py).
 - name: Pre-pull exact images selected by preflight
-  community.docker.docker_image_pull:
-    name: "{{ item }}"
-    pull: not_present
-    platform: "linux/{{ matrix_deb_arch }}"
-    timeout: 180
-  loop: "{{ matrix_resolved_images }}"
-  loop_control:
-    label: "{{ item }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ playbook_dir }}/../../tools/pull_images.py"
+      - --lock
+      - "{{ matrix_version_lock_file }}"
+      - --policy
+      - "{{ playbook_dir }}/../inventory/group_vars/all/versions.yml"
+      - --mirrors-json
+      - "{{ matrix_registry_mirrors | to_json }}"
+      - --arch
+      - "{{ matrix_deb_arch }}"
+      - --timeout
+      - "{{ matrix_image_pull_timeout | string }}"
+  register: docker_image_pull_result
+  changed_when: "'PULLED ' in docker_image_pull_result.stdout"
   when: not ansible_check_mode
+
+- name: Show image sources
+  ansible.builtin.debug:
+    msg: "{{ docker_image_pull_result.stdout_lines }}"
+  when:
+    - not ansible_check_mode
+    - docker_image_pull_result.stdout_lines is defined
 
 - name: Ensure Matrix service account has no supplementary groups
   ansible.builtin.user:
