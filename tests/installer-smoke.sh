@@ -36,7 +36,9 @@ publish_release() {
   local stage="${work}/stage/matrix-deploy-${tag}"
   rm -rf "${work}/stage"
   mkdir -p "$stage" "${dl}/${repo}/releases/download/${tag}" "${api}/repos/${repo}/releases"
-  cp -a "$root/install.sh" "$root/scripts" "$stage/"
+  # Package the actual lifecycle scripts, preserving the executable bits that
+  # git archive and the public release bundle must carry.
+  cp -a "$root"/*.sh "$root/scripts" "$stage/"
   cat > "$stage/bootstrap.sh" <<EOF_BOOT
 #!/usr/bin/env bash
 printf '%s|%s|%s\n' "\$(cd "\$(dirname "\$0")" && pwd)" "\$*" "\${MATRIX_DEPLOY_RELEASE_TAG:-}" >> '${work}/bootstrap.calls'
@@ -61,6 +63,17 @@ bash "$root/install.sh" >/dev/null
 IFS='|' read -r _ args tag < "${work}/bootstrap.calls"
 [[ "$args" == '--install' ]] || fail "bootstrap.sh called with '$args', expected --install"
 [[ "$tag" == 'v1.0.0' ]] || fail "MATRIX_DEPLOY_RELEASE_TAG='$tag', expected v1.0.0"
+
+# A successful install must leave every documented CLI command dispatchable.
+# Check both the checkout and the extracted archive before replacing scripts
+# with harmless stubs for the dispatch tests below.
+mkdir -p "${work}/unpacked"
+tar -xzf "${dl}/${repo}/releases/download/v1.0.0/matrix-deploy-v1.0.0.tar.gz" \
+  -C "${work}/unpacked" --strip-components=1
+for s in converge.sh upgrade.sh verify.sh check.sh backup.sh destroy.sh; do
+  [[ -x "$root/$s" ]] || fail "$s is not executable in the checkout"
+  [[ -x "${work}/unpacked/$s" ]] || fail "$s is not executable in the release archive"
+done
 
 # 2. A tampered archive must be rejected before bootstrap runs.
 rm -f "${work}/bootstrap.calls"
