@@ -52,11 +52,18 @@ container_check() {
     local name="$1"
     local state
     state="$(docker inspect "$name" --format '{% raw %}{{.State.Status}}{% endraw %}' 2>/dev/null)" || state='missing'
-    if [ "$state" = 'running' ]; then
-        ok "container: $name running"
-    else
+    if [ "$state" != 'running' ]; then
         fail "container: $name state=$state"
+        return
     fi
+    # Docker health (only for images/containers that define a healthcheck).
+    local health
+    health="$(docker inspect "$name" --format '{% raw %}{{if .State.Health}}{{.State.Health.Status}}{{end}}{% endraw %}' 2>/dev/null)" || health=''
+    case "$health" in
+        ''|healthy) ok "container: $name running${health:+ ($health)}" ;;
+        starting) warn "container: $name running (healthcheck still starting)" ;;
+        *) fail "container: $name running but $health" ;;
+    esac
 }
 
 container_image_check() {
@@ -267,12 +274,15 @@ else
     fail 'LiveKit webhook на lk-jwt-service /sfu_webhook не настроен'
 fi
 JWT_WEBHOOK_CODE="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:{{ element_jwt_host_port }}/sfu_webhook)"
+# lk-jwt-service answers 200 to every webhook delivery (so LiveKit never
+# retries); signature verification happens internally and unsigned events are
+# dropped. The route therefore exists unless the answer is 404 or no answer.
 case "$JWT_WEBHOOK_CODE" in
-    4??)
+    2??|4??)
         if [ "$JWT_WEBHOOK_CODE" = '404' ]; then
             fail 'lk-jwt-service не обслуживает /sfu_webhook (HTTP 404)'
         else
-            ok "lk-jwt-service /sfu_webhook отвечает (неподписанный запрос отклонён: HTTP $JWT_WEBHOOK_CODE)"
+            ok "lk-jwt-service /sfu_webhook доступен (HTTP $JWT_WEBHOOK_CODE)"
         fi
         ;;
     *) fail "lk-jwt-service /sfu_webhook: HTTP $JWT_WEBHOOK_CODE" ;;
