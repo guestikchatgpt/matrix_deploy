@@ -31,7 +31,7 @@
     owner: "{{ synapse_uid }}"
     group: "{{ synapse_gid }}"
     mode: '0640'
-  notify: Restart Synapse
+  register: synapse_homeserver_config
 
 - name: Render log.config
   ansible.builtin.template:
@@ -40,7 +40,7 @@
     owner: "{{ synapse_uid }}"
     group: "{{ synapse_gid }}"
     mode: '0640'
-  notify: Restart Synapse
+  register: synapse_log_config
 
 - name: Run Synapse container
   community.docker.docker_container:
@@ -65,19 +65,47 @@
       timeout: 5s
       retries: 5
     state: started
+  register: synapse_container
 
-- name: Apply Synapse configuration changes before readiness check
-  ansible.builtin.meta: flush_handlers
+# Restart only an already running container whose configuration changed; a
+# freshly created/started one already uses it, and restarting it would
+# interrupt the initial database schema setup on first start.
+- name: Restart Synapse to apply a configuration change
+  community.docker.docker_container:
+    name: "{{ synapse_container_name }}"
+    restart: true
+    state: started
+  when:
+    - not ansible_check_mode
+    - (synapse_homeserver_config is changed) or (synapse_log_config is changed)
+    - synapse_container is not changed
 
 - name: Wait for Synapse
-  ansible.builtin.uri:
-    url: http://127.0.0.1:8008/_matrix/client/versions
-    status_code: 200
-  register: synapse_up
-  retries: 20
-  delay: 3
-  until: synapse_up.status | default(0) == 200
   when: not ansible_check_mode
+  block:
+    - name: Wait for Synapse client API
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8008/_matrix/client/versions
+        status_code: 200
+      register: synapse_up
+      # The first start creates the whole database schema.
+      retries: 60
+      delay: 5
+      until: synapse_up.status | default(0) == 200
+  rescue:
+    - name: Collect Synapse container state and logs
+      ansible.builtin.shell: |
+        docker ps -a --filter name=^{{ synapse_container_name }}$ --format '{{ '{{' }}.Status{{ '}}' }}'
+        docker logs --tail 80 {{ synapse_container_name }} 2>&1
+      register: synapse_failure_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Synapse did not become available
+      ansible.builtin.fail:
+        msg: >-
+          Synapse did not answer on http://127.0.0.1:8008. Container status and
+          last log lines: {{ synapse_failure_logs.stdout_lines | default([]) }}
 
 - name: Read Matrix admin state from Synapse database
   community.docker.docker_container_exec:

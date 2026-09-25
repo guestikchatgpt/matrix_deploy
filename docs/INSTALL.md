@@ -198,6 +198,22 @@ matrix-deploy verify
   ```
 
   и запустите `matrix-deploy converge --admin-password`.
+- **PostgreSQL не поднялся при первой установке** (`Wait for PostgreSQL ...
+  Connection refused`, контейнера `postgres` нет в `docker ps`). В версиях до
+  исправления первого запуска контейнер перезапускался посреди инициализации
+  базы и оставлял её недоделанной. Пока Synapse ни разу не запускался, в базе
+  нет данных, и её можно безопасно пересоздать:
+
+  ```bash
+  docker logs --tail 50 postgres        # посмотреть причину
+  docker rm -f postgres
+  rm -rf /opt/matrix/postgres/data/pgdata
+  git -C /opt/matrix-deploy/source pull
+  matrix-deploy converge --admin-password
+  ```
+
+  На работающей установке с пользователями так делать **нельзя** — это удалит
+  базу.
 - **Повторный `./bootstrap.sh`** на уже настроенном сервере намеренно
   отклоняется: он перезаписал бы топологию и обновил бы версии без backup.
   Используйте `matrix-deploy converge`.

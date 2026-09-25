@@ -81,7 +81,7 @@
     owner: root
     group: root
     mode: '0644'
-  notify: Restart PostgreSQL container
+  register: postgresql_config
 
 - name: Run PostgreSQL container
   community.docker.docker_container:
@@ -120,25 +120,54 @@
       timeout: 5s
       retries: 5
     state: started
+  register: postgresql_container
   no_log: true
 
-- name: Apply PostgreSQL configuration changes before readiness check
-  ansible.builtin.meta: flush_handlers
+# Restart only an already running container whose configuration changed. A
+# container that was just created or (re)started already reads the new file;
+# restarting it would kill the entrypoint's first-run initdb halfway and
+# leave a broken cluster behind.
+- name: Restart PostgreSQL to apply a configuration change
+  community.docker.docker_container:
+    name: postgres
+    restart: true
+    state: started
+  when:
+    - not ansible_check_mode
+    - postgresql_config is changed
+    - postgresql_container is not changed
 
 - name: Wait for PostgreSQL to be available
-  community.postgresql.postgresql_ping:
-    login_host: 127.0.0.1
-    login_port: "{{ postgresql_host_port }}"
-    login_user: "{{ postgresql_synapse_user }}"
-    login_password: "{{ postgresql_synapse_password }}"
-    login_db: "{{ postgresql_synapse_db }}"
-  register: pg_ping
-  retries: 20
-  delay: 3
-  until: pg_ping.is_available | default(false) | bool
-  changed_when: false
-  no_log: true
   when: not ansible_check_mode
+  block:
+    - name: Wait for PostgreSQL to accept connections
+      community.postgresql.postgresql_ping:
+        login_host: 127.0.0.1
+        login_port: "{{ postgresql_host_port }}"
+        login_user: "{{ postgresql_synapse_user }}"
+        login_password: "{{ postgresql_synapse_password }}"
+        login_db: "{{ postgresql_synapse_db }}"
+      register: pg_ping
+      retries: 60
+      delay: 3
+      until: pg_ping.is_available | default(false) | bool
+      changed_when: false
+      no_log: true
+  rescue:
+    - name: Collect PostgreSQL container state and logs
+      ansible.builtin.shell: |
+        docker ps -a --filter name=^postgres$ --format '{{ '{{' }}.Status{{ '}}' }}'
+        docker logs --tail 80 postgres 2>&1
+      register: postgresql_failure_logs
+      changed_when: false
+      failed_when: false
+
+    - name: PostgreSQL did not become available
+      ansible.builtin.fail:
+        msg: >-
+          PostgreSQL did not accept connections on 127.0.0.1:{{ postgresql_host_port }}.
+          Container status and last log lines:
+          {{ postgresql_failure_logs.stdout_lines | default([]) }}
 
 - name: Show effective PostgreSQL tuning
   ansible.builtin.debug:
