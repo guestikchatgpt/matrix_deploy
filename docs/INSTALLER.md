@@ -2,11 +2,10 @@
 
 Установка из git-клона под root пошагово описана в [`INSTALL.md`](INSTALL.md).
 
-Каналом распространения являются GitHub Releases. Пока репозиторий приватный,
-анонимная установка одной командой не работает: для неё репозиторий и
-release assets должны быть публичными.
+Каналом распространения являются GitHub Releases
+(<https://github.com/guestikchatgpt/matrix_deploy/releases>).
 
-## Первая установка (после первого stable-релиза)
+## Первая установка
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/guestikchatgpt/matrix_deploy/main/install.sh | sudo bash

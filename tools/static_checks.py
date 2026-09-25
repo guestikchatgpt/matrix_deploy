@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import sys
@@ -23,20 +24,23 @@ for path in sorted((ROOT / ".github").rglob("*.yml")):
     except Exception as exc:  # noqa: BLE001
         errors.append(f"Workflow YAML parse failed: {path.relative_to(ROOT)}: {exc}")
 
-# Production reference identifiers may appear in ROADMAP history only, never in
-# executable deployment content.
-for path in sorted(ROOT.rglob("*")):
-    if not path.is_file() or ".git" in path.parts or ".venv" in path.parts:
-        continue
-    if path.name == "ROADMAP.md":
-        continue
-    try:
-        text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        continue
-    for forbidden in ("redacted" + ".ru", "203.0.113" + ".119"):
-        if forbidden in text:
-            errors.append(f"Hardcoded production identifier {forbidden!r}: {path.relative_to(ROOT)}")
+# Deployment-specific identifiers (real domains, IPs) must never be committed.
+# The list is kept out of the repository: set MATRIX_DEPLOY_FORBIDDEN to a
+# comma-separated list of strings to check for.
+forbidden_identifiers = [
+    item.strip() for item in os.environ.get("MATRIX_DEPLOY_FORBIDDEN", "").split(",") if item.strip()
+]
+if forbidden_identifiers:
+    for path in sorted(ROOT.rglob("*")):
+        if not path.is_file() or ".git" in path.parts or ".venv" in path.parts:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for forbidden in forbidden_identifiers:
+            if forbidden in text:
+                errors.append(f"Forbidden deployment identifier {forbidden!r}: {path.relative_to(ROOT)}")
 
 patterns = {
     r"\bpull:\s*true\b": "Routine convergence must not force image pulls",

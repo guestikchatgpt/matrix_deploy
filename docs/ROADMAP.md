@@ -1,6 +1,6 @@
 # Дорожная карта hardening Matrix Deploy
 
-Этот репозиторий начался с исходного Ansible baseline, импортированного до production-исправлений Matrix-стека `redacted.ru`, выполненных 2026-08-18.
+Этот репозиторий начался с Ansible baseline, импортированного до production-исправлений реального Matrix-стека, выполненных 2026-08-18.
 
 Цель остаётся прежней: переиспользуемый установщик для чистого сервера Ubuntu 24.04 LTS. Production-состояние служит эталонной реализацией, а не источником жёстко заданных доменов, IP-адресов, учётных данных или одноразовых предположений о конкретном хосте.
 
@@ -152,7 +152,7 @@ Bootstrap остаётся orchestration UX; логика Matrix-сервисо�
 11. rehearsal backup/destroy/restore на disposable host;
 12. финальный verifier без обязательных FAIL.
 
-## Статус реализации — `agent/roadmap-hardening`
+## Статус реализации (v1.0.0)
 
 ### Реализовано в коде
 
@@ -205,13 +205,13 @@ Bootstrap остаётся orchestration UX; логика Matrix-сервисо�
 
 ### Release gates, для которых всё ещё нужен disposable/реальный Ubuntu-хост
 
-- [ ] Полная чистая установка Ubuntu 24.04 через `bootstrap.sh` с реальными DNS проекта и Let's Encrypt, используя динамически выбранный exact version lock.
+- [x] Полная чистая установка Ubuntu 24.04 через `bootstrap.sh` с реальными DNS проекта и Let's Encrypt, используя динамически выбранный exact version lock.
 - [ ] Второй запуск `converge.sh` без непредусмотренных изменений и без изменения lock.
 - [ ] `check.sh` на установленном хосте; проверить полезность diff и отсутствие ложных runtime failures.
 - [ ] Reboot и проверка persistence.
 - [ ] `verify.sh --deep` / staging renewal Certbot на clean-host deployment.
-- [ ] Проверка входящей и исходящей федерации, если она включена.
+- [x] Проверка входящей и исходящей федерации, если она включена (приглашения и комнаты с другим сервером).
 - [ ] Authenticated relay test классического Coturn.
-- [ ] Локальные и federated MatrixRTC audio/video calls; подтвердить доступность embedded TURN relay.
+- [x] MatrixRTC audio/video calls между клиентами из разных сетей. Отдельная проверка embedded TURN relay ещё не проводилась.
 - [ ] Полный rehearsal backup -> destroy -> restore до включения автоматического restore; восстановить именно сохранённый version lock, а не молча выбирать новые версии во время disaster recovery.
 - [ ] Финальный verifier без обязательных FAIL на release-candidate host.

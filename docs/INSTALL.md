@@ -102,14 +102,9 @@ cd /opt/matrix-deploy/source
 git log --oneline -1   # убедиться, что это main и нужный коммит
 ```
 
-Если репозиторий приватный, нужен доступ на чтение: fine-grained personal
-access token (право `Contents: Read-only`) или deploy key.
-
-```bash
-# вариант с токеном (токен попадёт в .git/config, после клона его стоит убрать):
-git clone https://<github-user>:<token>@github.com/guestikchatgpt/matrix_deploy.git /opt/matrix-deploy/source
-git -C /opt/matrix-deploy/source remote set-url origin https://github.com/guestikchatgpt/matrix_deploy.git
-```
+Чтобы поставить конкретный релиз, а не текущий `main`, после клона выполните
+`git -C /opt/matrix-deploy/source checkout v1.0.0`. Вместо шагов 3–4 и 6 можно
+поставить релиз одной командой — см. [`INSTALLER.md`](INSTALLER.md).
 
 ## 5. Проверить DNS до запуска
 

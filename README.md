@@ -1,5 +1,10 @@
 # Matrix Deploy
 
+[![Release](https://img.shields.io/github/v/release/guestikchatgpt/matrix_deploy)](https://github.com/guestikchatgpt/matrix_deploy/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**Текущий релиз: [v1.0.0](https://github.com/guestikchatgpt/matrix_deploy/releases/tag/v1.0.0).**
+
 Разворачивает собственный мессенджер на [Matrix](https://matrix.org) — с
 веб-клиентом, админкой, аудио- и видеозвонками — на одном чистом сервере
 **Ubuntu 24.04 LTS**. Установка интерактивная: вы отвечаете на несколько
@@ -94,12 +99,19 @@ AAAA-записей (IPv6) для этих имён быть не должно. 
 
 ### Затем — сама установка
 
-Коротко (под `root`):
+Одной командой под `root` — ставится последний stable-релиз (архив
+проверяется по SHA-256):
 
 ```bash
 apt-get update && apt-get -y full-upgrade
+curl -fsSL https://raw.githubusercontent.com/guestikchatgpt/matrix_deploy/main/install.sh | bash
+```
+
+Или из git, зафиксировав релиз:
+
+```bash
 apt-get install -y git
-git clone https://github.com/guestikchatgpt/matrix_deploy.git /opt/matrix-deploy/source
+git clone --branch v1.0.0 https://github.com/guestikchatgpt/matrix_deploy.git /opt/matrix-deploy/source
 cd /opt/matrix-deploy/source
 ./bootstrap.sh --install
 ```
@@ -107,12 +119,6 @@ cd /opt/matrix-deploy/source
 Установщик задаст вопросы, проверит сервер и DNS, покажет план и после
 подтверждения всё развернёт. **Пошагово, с подготовкой DNS и портов и
 разбором ошибок — [`docs/INSTALL.md`](docs/INSTALL.md).**
-
-Когда появятся публичные релизы, будет доступна установка одной командой:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/guestikchatgpt/matrix_deploy/main/install.sh | sudo bash
-```
 
 ## Команды
 
@@ -168,7 +174,13 @@ curl -fsSL https://raw.githubusercontent.com/guestikchatgpt/matrix_deploy/main/i
 
 ## Статус
 
-Проект готовится к первому релизу. Автоматические проверки (CI) проходят, но
-полная установка на чистом сервере с реальными DNS и сертификатами, а также
-звонки через интернет ещё проходят финальную проверку — см.
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+**v1.0.0** — первый стабильный релиз. Проверено на реальном сервере Ubuntu
+24.04: чистая установка с настоящими DNS и сертификатами Let's Encrypt,
+федерация с другим Matrix-сервером, аудио- и видеозвонки между клиентами из
+разных сетей. Что ещё не проверено и что в планах — в
+[`docs/ROADMAP.md`](docs/ROADMAP.md). Список изменений — на странице
+[Releases](https://github.com/guestikchatgpt/matrix_deploy/releases).
+
+## Лицензия
+
+[MIT](LICENSE).
