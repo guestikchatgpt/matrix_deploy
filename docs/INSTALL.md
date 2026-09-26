@@ -1,74 +1,80 @@
-# Установка на сервер: пошагово под root
+# Server installation: step by step as root
 
-Инструкция для чистого сервера **Ubuntu 24.04 LTS (noble)**, на котором вы
-работаете под `root`. Ubuntu 26.04 пока не поддерживается: `bootstrap.sh` и
-preflight откажутся запускаться на любой версии, кроме 24.04.
+**English** | [Русский](ru/INSTALL.md)
 
-Схема работы — Ansible с локальным контроллером: всё запускается на самом
-сервере, отдельная машина с Ansible не нужна.
+This guide is for a clean **Ubuntu 24.04 LTS (noble)** server where you work
+as `root`. Ubuntu 26.04 is not supported yet: `bootstrap.sh` and preflight
+refuse to run on anything other than 24.04.
 
-## 0. Что подготовить заранее
+The model is Ansible with a local controller: everything runs on the server
+itself, no separate Ansible machine is needed.
 
-**Сервер**
+## 0. Prepare in advance
 
-- чистая Ubuntu 24.04 LTS, доступ под `root` (или `sudo -i`);
-- минимум 2 vCPU и 2 GiB RAM (рекомендуется 4 GiB и больше), не меньше
-  10 GiB свободного места на `/`;
-- публичный IPv4: назначенный прямо на сервер или через NAT с пробросом портов.
+**Server**
 
-**DNS — сделать до запуска установки.** Создайте у DNS-провайдера шесть
-A-записей на публичный IPv4 сервера (префиксы можно поменять во время установки,
-ниже — значения по умолчанию для `example.com`). Без них установка не начнётся:
-preflight проверяет каждую запись, а сертификаты Let's Encrypt выпускаются
-только для имён, которые уже указывают на сервер. Новые записи расходятся от
-нескольких минут до пары часов, поэтому заведите их заранее.
+- clean Ubuntu 24.04 LTS, `root` access (or `sudo -i`);
+- at least 2 vCPU and 2 GiB RAM (4 GiB or more recommended), at least
+  10 GiB of free space on `/`;
+- a public IPv4 address: assigned directly to the server or behind NAT with
+  port forwarding.
 
-| Имя | Назначение |
+**DNS — do this before running the installer.** Create six A records at your
+DNS provider pointing to the server's public IPv4 (prefixes can be changed
+during installation; below are the defaults for `example.com`). Installation
+will not start without them: preflight checks every record, and Let's Encrypt
+certificates can only be issued for names that already point to the server.
+New records take anywhere from a few minutes to a couple of hours to
+propagate, so create them ahead of time.
+
+| Name | Purpose |
 | --- | --- |
-| `matrix.example.com` | Synapse (это же Matrix server name: `@user:matrix.example.com`) |
+| `matrix.example.com` | Synapse (also the Matrix server name: `@user:matrix.example.com`) |
 | `element.example.com` | Element Web |
-| `synad.example.com` | Ketesa (админка Synapse) |
+| `synad.example.com` | Ketesa (Synapse admin panel) |
 | `call.example.com` | Element Call |
 | `rtc.example.com` | LiveKit / MatrixRTC |
-| `turn.example.com` | классический TURN (Coturn) |
+| `turn.example.com` | classic TURN (Coturn) |
 
-У каждого имени должна быть ровно одна A-запись — на IP этого сервера.
-**AAAA-записей быть не должно**: IPv6-режим не поддерживается, и preflight
-остановит установку, если найдёт AAAA.
+Each name must have exactly one A record — the IP of this server.
+**There must be no AAAA records**: IPv6 mode is not supported, and preflight
+stops the installation if it finds AAAA records.
 
-**Порты.** Если перед сервером есть облачный firewall или NAT, откройте или
-пробросьте входящие порты (UFW на самом сервере установка настроит сама):
+**Ports.** If there is a cloud firewall or NAT in front of the server, open or
+forward these inbound ports (the installer configures UFW on the server
+itself):
 
-| Порт | Назначение |
+| Port | Purpose |
 | --- | --- |
-| TCP 22 (или ваш SSH-порт) | SSH |
+| TCP 22 (or your SSH port) | SSH |
 | TCP 80, 443 | HTTP/ACME, HTTPS |
-| TCP 8448 | федерация (если включаете) |
+| TCP 8448 | federation (if enabled) |
 | TCP+UDP 3478, 5349 | Coturn |
-| UDP 57000-57999 | relay Coturn |
+| UDP 57000-57999 | Coturn relay |
 | TCP 7881, UDP 62000-62999 | LiveKit RTC |
-| UDP 3480, TCP 5449 | встроенный TURN LiveKit |
-| UDP 63000-63999 | relay встроенного TURN LiveKit |
+| UDP 3480, TCP 5449 | LiveKit embedded TURN |
+| UDP 63000-63999 | LiveKit embedded TURN relay |
 
-Ещё понадобится email для Let's Encrypt и пароль для будущего администратора
-Matrix (`@admin`).
+You will also need an email address for Let's Encrypt and a password for the
+future Matrix administrator (`@admin`).
 
-## 1. Подключиться к серверу
+## 1. Connect to the server
 
 ```bash
-ssh root@<IP-сервера>
+ssh root@<server-IP>
 ```
 
-Установку лучше запускать внутри `tmux`, чтобы обрыв SSH не прервал Ansible:
+It is best to run the installation inside `tmux` so that a dropped SSH
+connection does not interrupt Ansible:
 
 ```bash
 apt-get update && apt-get install -y tmux
 tmux new -s matrix
 ```
 
-После обрыва связи вернуться в сессию: `tmux attach -t matrix`.
+To get back into the session after a disconnect: `tmux attach -t matrix`.
 
-## 2. Обновить систему
+## 2. Update the system
 
 ```bash
 apt-get update
@@ -76,37 +82,38 @@ apt-get -y full-upgrade
 [ -f /var/run/reboot-required ] && reboot
 ```
 
-Если сервер ушёл в перезагрузку, подключитесь заново (и снова откройте `tmux`).
+If the server rebooted, reconnect (and reopen `tmux`).
 
-## 3. Установить git
+## 3. Install git
 
 ```bash
 apt-get install -y git ca-certificates
 ```
 
-**Ansible вручную ставить не нужно, и не стоит.** `bootstrap.sh` сам ставит
-Python-зависимости, `skopeo`, `dnsutils` и прочее, создаёт виртуальное окружение
-`.venv` и устанавливает в него зафиксированные ansible-core 2.21.4 и коллекции
-из `ansible/requirements.yml`. Пакет `ansible` из apt Ubuntu 24.04 слишком старый
-и установкой не используется.
+**Do not install Ansible manually — there is no need.** `bootstrap.sh` installs
+the Python dependencies, `skopeo`, `dnsutils` and the rest itself, creates the
+`.venv` virtual environment and installs the pinned ansible-core 2.21.4 and
+the collections from `ansible/requirements.yml` into it. The `ansible` apt
+package on Ubuntu 24.04 is too old and is not used.
 
-## 4. Склонировать репозиторий
+## 4. Clone the repository
 
-Клонируйте в `/opt/matrix-deploy/source` — это стандартное место, с которым
-работает CLI `matrix-deploy`:
+Clone into `/opt/matrix-deploy/source` — this is the standard location the
+`matrix-deploy` CLI works with:
 
 ```bash
 mkdir -p /opt/matrix-deploy
 git clone https://github.com/guestikchatgpt/matrix_deploy.git /opt/matrix-deploy/source
 cd /opt/matrix-deploy/source
-git log --oneline -1   # убедиться, что это main и нужный коммит
+git log --oneline -1   # make sure this is main and the expected commit
 ```
 
-Чтобы поставить конкретный релиз, а не текущий `main`, после клона выполните
-`git -C /opt/matrix-deploy/source checkout v1.0.0`. Вместо шагов 3–4 и 6 можно
-поставить релиз одной командой — см. [`INSTALLER.md`](INSTALLER.md).
+To install a specific release instead of the current `main`, run
+`git -C /opt/matrix-deploy/source checkout v1.0.0` after cloning. Instead of
+steps 3–4 and 6 you can install a release with a single command — see
+[`INSTALLER.md`](INSTALLER.md).
 
-## 5. Проверить DNS до запуска
+## 5. Check DNS before starting
 
 ```bash
 for h in matrix element synad call rtc turn; do
@@ -116,127 +123,133 @@ for h in matrix element synad call rtc turn; do
 done
 ```
 
-(`dig` появится после шага 6; до этого можно поставить его вручную:
-`apt-get install -y dnsutils`.) Везде должен быть только ваш IPv4, а AAAA —
-пустой.
+(`dig` becomes available after step 6; before that you can install it
+manually: `apt-get install -y dnsutils`.) Every name should show only your
+IPv4, and AAAA should be empty.
 
-## 6. Запустить установку
+## 6. Run the installation
 
 ```bash
 cd /opt/matrix-deploy/source
 ./bootstrap.sh --install
 ```
 
-Что происходит:
+What happens:
 
-1. `--install` ставит CLI `/usr/local/sbin/matrix-deploy` и записывает текущий
-   коммит в `/opt/matrix-deploy/installed-release`. Репозиторий остаётся на
-   месте, копирования нет, потому что он уже лежит в `/opt/matrix-deploy/source`.
-2. `bootstrap.sh` ставит системные зависимости, `.venv`, ansible-core и коллекции.
-3. Запускается интерактивный `deploy.sh`.
+1. `--install` installs the `/usr/local/sbin/matrix-deploy` CLI and records
+   the current commit in `/opt/matrix-deploy/installed-release`. The
+   repository stays in place — nothing is copied, because it already lives in
+   `/opt/matrix-deploy/source`.
+2. `bootstrap.sh` installs system dependencies, `.venv`, ansible-core and the
+   collections.
+3. The interactive `deploy.sh` starts.
 
-Вопросы `deploy.sh` (в скобках — значение по умолчанию, Enter его принимает):
+`deploy.sh` questions (the default is in brackets; Enter accepts it):
 
-| Вопрос | Что ответить |
+| Question | What to answer |
 | --- | --- |
-| Базовый домен | ваш домен, например `example.com` |
-| Префиксы Matrix/Element/Ketesa/Call/RTC/TURN | Enter, если DNS сделан по таблице выше |
-| Email Let's Encrypt | рабочий email |
-| Включить федерацию? | `y`: общение с другими Matrix-серверами; `n`: закрытый сервер |
-| Использовать этот IPv4? | проверить, что определился именно публичный IP сервера |
-| Локальный relay IP (только при NAT) | внутренний IP сервера, на который NAT пробрасывает порты |
-| Пароль Matrix admin | пароль для `@admin:matrix.<домен>` (не отображается) |
+| Base domain | your domain, e.g. `example.com` |
+| Matrix/Element/Ketesa/Call/RTC/TURN prefixes | Enter, if DNS was set up per the table above |
+| Let's Encrypt email | a working email address |
+| Enable Matrix federation? | `y`: talk to other Matrix servers; `n`: closed server |
+| Use this IPv4? | make sure the detected IP really is the server's public IP |
+| Local relay IP for Coturn (NAT only) | the server's internal IP that NAT forwards the ports to |
+| Matrix admin password | password for `@admin:matrix.<domain>` (not echoed) |
 
-Затем установщик:
+Then the installer:
 
-- сохраняет топологию в `/etc/matrix-deploy/deployment.yml`;
-- запускает preflight: ОС, ресурсы, DNS A/AAAA, свободные порты, apt, выбор
-  актуальных stable-версий с проверкой образов в registry;
-- фиксирует версии в `/etc/matrix-deploy/versions.yml`;
-- показывает план и спрашивает **«Preflight успешен. Запустить деплой?»**.
-  По умолчанию ответ «нет», для продолжения введите `y`.
+- saves the topology to `/etc/matrix-deploy/deployment.yml`;
+- runs preflight: OS, resources, DNS A/AAAA, free ports, apt, and selection of
+  the latest stable versions with image checks against the registry;
+- pins the versions in `/etc/matrix-deploy/versions.yml`;
+- shows the plan and asks **“Preflight succeeded. Start the deployment?”**.
+  The default answer is “no”; type `y` to continue.
 
-Основной playbook идёт несколько минут: Docker, Nginx и сертификаты Let's Encrypt,
-PostgreSQL, Synapse, веб-приложения, LiveKit, Coturn, UFW, Fail2ban. В конце
-автоматически запускается verifier; успешная установка заканчивается строкой
-`Все обязательные проверки пройдены успешно.`
+The main playbook takes a few minutes: Docker, Nginx and Let's Encrypt
+certificates, PostgreSQL, Synapse, web applications, LiveKit, Coturn, UFW,
+Fail2ban. At the end the verifier runs automatically; a successful
+installation ends with the line `All required checks passed.`
 
-## 7. Проверить результат
+## 7. Check the result
 
 ```bash
 matrix-deploy verify
 ```
 
-- Element Web: `https://element.<домен>`, вход `admin` с паролем из шага 6;
-- админка Ketesa: `https://synad.<домен>`, вход тем же `@admin`;
-- Element Call: `https://call.<домен>`.
+- Element Web: `https://element.<domain>`, log in as `admin` with the password
+  from step 6;
+- Ketesa admin panel: `https://synad.<domain>`, log in as the same `@admin`;
+- Element Call: `https://call.<domain>`.
 
-## Если что-то пошло не так
+## Troubleshooting
 
-- **Preflight ругается на DNS, AAAA или занятые порты** — исправьте причину и
-  запустите `matrix-deploy converge --admin-password` (топология уже сохранена,
-  повторно её вводить не нужно).
-- **Установка прервалась посередине** (обрыв SSH, ошибка сети) —
-  `matrix-deploy converge --admin-password`. Пароль нужен только если учётная
-  запись `@admin` ещё не создана; в `/etc/matrix-deploy` он не сохраняется.
-- **Не скачивается образ** (`i/o timeout` к `ghcr.io` или Docker Hub). Установщик
-  сам пробует upstream, официальный альтернативный реестр и публичные зеркала,
-  всегда по зафиксированному digest. Если не помогло ни одно, добавьте своё
-  зеркало или прокси в `/etc/matrix-deploy/deployment.yml`, например:
+- **Preflight complains about DNS, AAAA records or busy ports** — fix the cause
+  and run `matrix-deploy converge --admin-password` (the topology is already
+  saved; you do not need to enter it again).
+- **The installation was interrupted halfway** (SSH dropped, network error) —
+  `matrix-deploy converge --admin-password`. The password is only needed if
+  the `@admin` account has not been created yet; it is not stored in
+  `/etc/matrix-deploy`.
+- **An image fails to download** (`i/o timeout` to `ghcr.io` or Docker Hub).
+  The installer itself tries upstream, the official alternative registry and
+  public mirrors, always by the pinned digest. If none of them work, add your
+  own mirror or proxy to `/etc/matrix-deploy/deployment.yml`, for example:
 
   ```yaml
   matrix_registry_proxy: "http://user:password@proxy.example:3128"
-  # или/и свои зеркала (полностью заменяют список по умолчанию):
+  # and/or your own mirrors (they fully replace the default list):
   matrix_registry_mirrors:
     docker.io: [mirror.gcr.io, dockerhub.timeweb.cloud]
     ghcr.io: [ghcr.nju.edu.cn, ghcr.m.daocloud.io]
   ```
 
-  и запустите `matrix-deploy converge --admin-password`.
-- **PostgreSQL не поднялся при первой установке** (`Wait for PostgreSQL ...
-  Connection refused`, контейнера `postgres` нет в `docker ps`). В версиях до
-  исправления первого запуска контейнер перезапускался посреди инициализации
-  базы и оставлял её недоделанной. Пока Synapse ни разу не запускался, в базе
-  нет данных, и её можно безопасно пересоздать:
+  and run `matrix-deploy converge --admin-password`.
+- **PostgreSQL did not come up on the first install** (`Wait for PostgreSQL ...
+  Connection refused`, no `postgres` container in `docker ps`). In versions
+  before the first-start fix, the container was restarted in the middle of
+  database initialization and left it half-done. As long as Synapse has never
+  started, the database holds no data and can be safely recreated:
 
   ```bash
-  docker logs --tail 50 postgres        # посмотреть причину
+  docker logs --tail 50 postgres        # see the cause
   docker rm -f postgres
   rm -rf /opt/matrix/postgres/data/pgdata
   git -C /opt/matrix-deploy/source pull
   matrix-deploy converge --admin-password
   ```
 
-  На работающей установке с пользователями так делать **нельзя** — это удалит
-  базу.
-- **Повторный `./bootstrap.sh`** на уже настроенном сервере намеренно
-  отклоняется: он перезаписал бы топологию и обновил бы версии без backup.
-  Используйте `matrix-deploy converge`.
-- **Начать с нуля** — `matrix-deploy destroy` (сначала сделает полный backup и
-  дважды попросит подтверждение), затем снова шаг 6.
+  **Never** do this on a running installation with users — it deletes the
+  database.
+- **Running `./bootstrap.sh` again** on an already configured server is
+  deliberately refused: it would overwrite the topology and upgrade versions
+  without a backup. Use `matrix-deploy converge`.
+- **Starting from scratch** — `matrix-deploy destroy` (it takes a full backup
+  first and asks for confirmation twice), then step 6 again.
 
-## Повседневные операции
+## Day-to-day operations
 
 ```bash
-matrix-deploy verify              # проверка стека; --deep добавит certbot renew --dry-run
-matrix-deploy converge            # повторно применить конфигурацию (версии не меняются)
-matrix-deploy upgrade             # backup -> актуальные stable-версии -> применение
-matrix-deploy backup              # backup БД и конфигурации (--include-media — с медиа)
-matrix-deploy check               # ansible --check --diff без изменений
-matrix-deploy version             # установленная версия установщика
+matrix-deploy verify              # check the stack; --deep adds certbot renew --dry-run
+matrix-deploy converge            # re-apply the configuration (versions unchanged)
+matrix-deploy upgrade             # backup -> latest stable versions -> apply
+matrix-deploy backup              # back up the DB and configuration (--include-media adds media)
+matrix-deploy check               # ansible --check --diff, no changes
+matrix-deploy version             # installed installer version
 ```
 
-**Обновление самого плейбука** при установке из git:
+**Updating the playbook itself** for a git installation:
 
 ```bash
 git -C /opt/matrix-deploy/source pull
-cd /opt/matrix-deploy/source && ./bootstrap.sh --prepare-only   # если сменились пины ansible/коллекций
+cd /opt/matrix-deploy/source && ./bootstrap.sh --prepare-only   # if ansible/collection pins changed
 matrix-deploy converge
 ```
 
-`matrix-deploy update` предназначен для установки из GitHub Release и на
-git-клоне намеренно отказывает, чтобы не заменить клон архивом.
+`matrix-deploy update` is meant for installations from a GitHub Release and
+deliberately refuses to run on a git clone, so that the clone is not replaced
+by an archive.
 
-Если после обновления плейбука `converge` сообщает, что версии в lock старше
-поддерживаемых (`locked versions are older than this playbook supports`),
-выполните `matrix-deploy upgrade`: он сделает backup и обновит версии.
+If, after updating the playbook, `converge` reports that the locked versions
+are older than supported (`locked versions are older than this playbook
+supports`), run `matrix-deploy upgrade`: it takes a backup and upgrades the
+versions.

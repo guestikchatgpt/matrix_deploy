@@ -34,22 +34,22 @@ case "${1:-}" in
     sed -n '4,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
-  *) fatal "неизвестный аргумент: $1 (ожидается --prepare-only или --install)" ;;
+  *) fatal "unknown argument: $1 (expected --prepare-only or --install)" ;;
 esac
 
 if [[ ${EUID} -ne 0 ]]; then
-  fatal "запустите bootstrap.sh от root (или через sudo)"
+  fatal "run bootstrap.sh as root (or via sudo)"
 fi
 
 if [[ ! -r /etc/os-release ]]; then
-  fatal "/etc/os-release отсутствует"
+  fatal "/etc/os-release is missing"
 fi
 
 # shellcheck disable=SC1091
 source /etc/os-release
 
 if [[ ${ID:-} != "ubuntu" || ${VERSION_CODENAME:-} != "noble" ]]; then
-  fatal "поддерживается Ubuntu 24.04 LTS (noble); обнаружено ${PRETTY_NAME:-unknown}"
+  fatal "only Ubuntu 24.04 LTS (noble) is supported; detected ${PRETTY_NAME:-unknown}"
 fi
 
 if [[ "$MODE" == install ]]; then
@@ -57,7 +57,7 @@ if [[ "$MODE" == install ]]; then
   # continue from there, so later `matrix-deploy` commands and converge/upgrade
   # always operate on the same source tree and .venv.
   if [[ "$REPO_ROOT" != "$INSTALLED_SOURCE" ]]; then
-    log "устанавливаю исходники в ${INSTALLED_SOURCE}"
+    log "installing sources into ${INSTALLED_SOURCE}"
     install -d -m 0755 "$INSTALL_ROOT"
     rm -rf "${INSTALLED_SOURCE}.new"
     mkdir -p "${INSTALLED_SOURCE}.new"
@@ -77,7 +77,7 @@ if [[ "$MODE" == install ]]; then
   fi
   printf '%s\n' "${release:-unknown}" > "$RELEASE_MARKER"
   install -m 0755 "${INSTALLED_SOURCE}/scripts/matrix-deploy" "$CLI_PATH"
-  log "CLI установлен: ${CLI_PATH}"
+  log "CLI installed: ${CLI_PATH}"
   if [[ "${MATRIX_DEPLOY_NONINTERACTIVE:-0}" == "1" ]]; then
     # Unattended install: prepare the controller only. The interactive
     # deploy (topology prompts, admin password) is started later with
@@ -89,7 +89,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 
-log "устанавливаю bootstrap-зависимости"
+log "installing bootstrap dependencies"
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates \
@@ -105,26 +105,26 @@ apt-get install -y --no-install-recommends \
   skopeo
 
 if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
-  log "создаю Python venv"
+  log "creating Python venv"
   # Use the noble distro interpreter explicitly: the pinned ansible-core needs
   # Python >= 3.12, and python3 on PATH may be an older local build.
   /usr/bin/python3.12 -m venv "${VENV_DIR}"
 fi
 
-log "устанавливаю ansible-core ${ANSIBLE_CORE_VERSION}"
+log "installing ansible-core ${ANSIBLE_CORE_VERSION}"
 "${VENV_DIR}/bin/python" -m pip install --disable-pip-version-check --upgrade pip wheel
 "${VENV_DIR}/bin/python" -m pip install --disable-pip-version-check "ansible-core==${ANSIBLE_CORE_VERSION}"
 
-log "устанавливаю pinned Ansible collections"
+log "installing pinned Ansible collections"
 "${VENV_DIR}/bin/ansible-galaxy" collection install \
   -r "${REPO_ROOT}/ansible/requirements.yml" \
   --force
 
-log "проверяю Ansible"
+log "checking Ansible"
 "${VENV_DIR}/bin/ansible-playbook" --version | sed -n '1,3p'
 
 if [[ "$MODE" == prepare ]]; then
-  log "окружение подготовлено; интерактивный deploy пропущен"
+  log "environment prepared; interactive deploy skipped"
   exit 0
 fi
 

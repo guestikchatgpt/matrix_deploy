@@ -1,237 +1,241 @@
-# Matrix Deploy: техническая документация
+# Matrix Deploy: technical documentation
 
-Этот документ описывает, как устроено развёртывание внутри: выбор версий,
-preflight, workflows, сетевую модель, сертификаты, MatrixRTC, безопасность и
-CI. Для установки и повседневной работы достаточно [`README.md`](../README.md) и
-[`INSTALL.md`](INSTALL.md).
+**English** | [Русский](ru/TECHNICAL.md)
 
-Связанные технические документы:
+This document describes how the deployment works inside: version selection,
+preflight, workflows, the network model, certificates, MatrixRTC, security
+and CI. For installation and day-to-day operation, [`README.md`](../README.md)
+and [`INSTALL.md`](INSTALL.md) are enough.
 
-- [`INSTALLER.md`](INSTALLER.md) — установщик из GitHub Releases, CLI
-  `matrix-deploy`, публикация релизов;
-- [`RESTORE.md`](RESTORE.md) — формат backup и порядок восстановления;
-- [`ROADMAP.md`](ROADMAP.md) — инварианты, статус реализации и release gates.
+Related technical documents:
 
-## Архитектура
+- [`INSTALLER.md`](INSTALLER.md) — the GitHub Releases installer, the
+  `matrix-deploy` CLI, publishing releases;
+- [`RESTORE.md`](RESTORE.md) — backup format and restore order;
+- [`ROADMAP.md`](ROADMAP.md) — invariants, implementation status and release gates.
 
-Ansible работает с локальным контроллером: playbook запускается на самом
-целевом сервере (`inventory/hosts.yml` — `localhost`, `ansible_connection:
-local`). Контроллер — отдельный `.venv` с зафиксированными ansible-core и
-коллекциями (`bootstrap.sh`, `ansible/requirements.yml`).
+## Architecture
 
-Роли `site.yml` в порядке выполнения: `common`, `firewall`, `fail2ban`,
+Ansible runs with a local controller: the playbook runs on the target server
+itself (`inventory/hosts.yml` — `localhost`, `ansible_connection: local`). The
+controller is a dedicated `.venv` with pinned ansible-core and collections
+(`bootstrap.sh`, `ansible/requirements.yml`).
+
+`site.yml` roles in execution order: `common`, `firewall`, `fail2ban`,
 `docker`, `nginx`, `postgres`, `synapse`, `element_web`, `element_call`,
 `synad` (Ketesa), `livekit`, `element_jwt`, `coturn`, `verification`.
 
-В контейнерах Docker работают PostgreSQL, Synapse, Element Web, Ketesa,
-Element Call, lk-jwt-service и LiveKit (LiveKit — в host network ради RTC/TURN).
-На хосте работают Nginx + Certbot, Coturn, UFW и Fail2ban.
+PostgreSQL, Synapse, Element Web, Ketesa, Element Call, lk-jwt-service and
+LiveKit run in Docker containers (LiveKit uses host networking for RTC/TURN).
+Nginx + Certbot, Coturn, UFW and Fail2ban run on the host.
 
-В репозитории намеренно сохранены два независимых контура звонков:
-классические звонки Matrix идут через системный Coturn, а MatrixRTC / Element
-Call — через LiveKit с собственным встроенным TURN. Объединять эти TURN-стеки
-нельзя.
+The repository deliberately keeps two independent calling paths: classic
+Matrix calls go through the system Coturn, while MatrixRTC / Element Call goes
+through LiveKit with its own embedded TURN. These TURN stacks must not be
+merged.
 
-## Выбор версий приложений
+## Application version selection
 
-Версии приложений **не захардкожены в playbook** и не берутся через плавающий
-`:latest` во время запуска контейнеров.
+Application versions are **not hardcoded in the playbook** and are not taken
+from a floating `:latest` when containers start.
 
-`ansible/inventory/group_vars/all/versions.yml` содержит только политику
-разрешения версий: upstream GitHub-репозитории, Docker image repositories,
-правила преобразования release tag -> image tag и разрешённый major PostgreSQL.
+`ansible/inventory/group_vars/all/versions.yml` contains only the version
+resolution policy: upstream GitHub repositories, Docker image repositories,
+release tag -> image tag mapping rules and the allowed PostgreSQL major.
 
-Во время первого preflight Matrix Deploy:
+During the first preflight, Matrix Deploy:
 
-1. получает latest stable release каждого приложения через GitHub Releases;
-2. исключает draft/prerelease через семантику stable release;
-3. для Docker Hub-образов дополнительно проверяет соответствующий tag через
+1. fetches the latest stable release of each application via GitHub Releases;
+2. excludes drafts/prereleases using stable release semantics;
+3. for Docker Hub images, additionally checks the corresponding tag via the
    Docker Hub API;
-4. для всех Docker Hub/GHCR-образов проверяет реальную доступность выбранного
-   image/tag и архитектуры хоста через `skopeo`;
-5. для PostgreSQL выбирает последний опубликованный stable patch в разрешённом
-   major, используя metadata Docker Official Images;
-6. атомарно сохраняет точный набор выбранных версий в
-   `/etc/matrix-deploy/versions.yml` с режимом `0600`;
-7. после установки Docker заранее скачивает именно эти exact image refs, а затем
-   запускает контейнеры с теми же refs.
+4. for all Docker Hub/GHCR images, verifies via `skopeo` that the selected
+   image/tag actually exists for the host architecture;
+5. for PostgreSQL, selects the latest published stable patch within the
+   allowed major, using Docker Official Images metadata;
+6. atomically saves the exact set of selected versions to
+   `/etc/matrix-deploy/versions.yml` with mode `0600`;
+7. after Docker is installed, pre-pulls exactly these image refs and then
+   starts the containers with the same refs.
 
-Таким образом, новая установка получает актуальные stable-версии на момент
-развёртывания, но весь конкретный deploy остаётся воспроизводимым.
+This way a new installation gets the latest stable versions at deployment
+time, while each specific deployment stays reproducible.
 
-Обычный `converge.sh` снова проверяет upstream и сообщает о доступных обновлениях,
-но **не переписывает version lock и не обновляет контейнеры самовольно**.
-Явное обновление выполняется через `upgrade.sh`: сначала backup, затем refresh
-lock-файла, затем converge с новым exact-набором.
+A regular `converge.sh` checks upstream again and reports available updates,
+but **does not rewrite the version lock or upgrade containers on its own**.
+An explicit upgrade is done via `upgrade.sh`: backup first, then a lock file
+refresh, then converge with the new exact set.
 
-Для каждого компонента в политике задан `min_version` — минимальный stable-релиз,
-на котором проверена текущая конфигурация (это не пин). Resolver никогда не
-выберет версию ниже, а обычный `converge.sh` откажется применять конфигурацию к
-lock со старыми версиями и попросит выполнить `upgrade.sh`. Текущие минимумы
-(2026-09-25): Synapse v1.161.0, Element Web v1.12.29, Element Call v0.26.0,
-LiveKit v1.13.7, lk-jwt-service 0.7.0, Ketesa v1.5.0, PostgreSQL 18.6.
+Each component in the policy has a `min_version` — the minimum stable release
+the current configuration has been tested with (this is not a pin). The
+resolver never selects a lower version, and a regular `converge.sh` refuses to
+apply the configuration to a lock with older versions and asks you to run
+`upgrade.sh`. Current minimums (2026-09-25): Synapse v1.161.0, Element Web
+v1.12.29, Element Call v0.26.0, LiveKit v1.13.7, lk-jwt-service 0.7.0, Ketesa
+v1.5.0, PostgreSQL 18.6.
 
-PostgreSQL является специальным случаем: его major задаётся политикой
-`postgresql_major` и автоматически не повышается. Resolver выбирает только
-последний stable release внутри разрешённого major. Смена major PostgreSQL —
-отдельная миграционная операция.
+PostgreSQL is a special case: its major version is set by the
+`postgresql_major` policy and is never raised automatically. The resolver
+only selects the latest stable release within the allowed major. A PostgreSQL
+major change is a separate migration.
 
-Если GitHub/Docker registry временно недоступны при обычном converge, существующий
-lock сохраняется. При первом deploy или явном `upgrade.sh` невозможность
-разрешить/проверить версии является ошибкой: развёртывание не должно начинаться с
-непроверенным набором образов.
+If GitHub/Docker registries are temporarily unreachable during a regular
+converge, the existing lock is kept. On the first deploy or an explicit
+`upgrade.sh`, failing to resolve/verify versions is an error: a deployment
+must not start with an unverified set of images.
 
-## Источники образов: digest, fallback и зеркала
+## Image sources: digest, fallback and mirrors
 
-Реестры бывают недоступны: `ghcr.io` и GitHub API могут отвечать таймаутами
-(фильтрация, троттлинг), Docker Hub — сбоить или ограничивать анонимные
-запросы. Поэтому каждый образ адресуется по **manifest digest**, а для
-получения есть цепочка источников.
+Registries can be unreachable: `ghcr.io` and the GitHub API may time out
+(filtering, throttling), and Docker Hub may fail or rate-limit anonymous
+requests. That is why every image is addressed by its **manifest digest**, and
+there is a chain of sources to fetch it from.
 
 **Preflight / resolver** (`tools/resolve_versions.py`, `tools/registry.py`):
 
-- версия берётся из GitHub Releases; если GitHub API недоступен, из списка
-  тегов в реестре (upstream → официальный альтернативный → зеркала) с тем же
-  stable-regex и `min_version`. PostgreSQL: metadata Docker Official Images →
-  Docker Hub API → теги в реестре;
-- для выбранного тега вычисляется digest (`sha256` сырого manifest index) и
-  проверяется наличие платформы хоста. Доверенные источники — upstream-реестр и
-  официальные альтернативные (`alternate_images` в `versions.yml`, например Ketesa
-  на Docker Hub с тем же digest). Публичному зеркалу по отдельности не
-  доверяем: без доступного upstream digest принимается, только если его
-  подтвердили **два независимых зеркала**;
-- в lock записываются `digest` и `digest_source`. У старых lock без digest
-  обычный converge дописывает digest для **уже зафиксированных** версий, не меняя
-  их (`LOCK_DIGESTS_ADDED`; так же поступает preflight в `check.sh`);
-- кросс-проверка через Docker Hub API фатальна только при определённом ответе
-  («тега нет»); сетевой сбой — предупреждение;
-- HTTP-запросы и skopeo повторяются с паузами.
+- the version comes from GitHub Releases; if the GitHub API is unreachable,
+  from the tag list in the registry (upstream → official alternative →
+  mirrors) with the same stable regex and `min_version`. PostgreSQL: Docker
+  Official Images metadata → Docker Hub API → registry tags;
+- for the selected tag, the digest is computed (`sha256` of the raw manifest
+  index) and the presence of the host platform is checked. Trusted sources
+  are the upstream registry and official alternatives (`alternate_images` in
+  `versions.yml`, e.g. Ketesa on Docker Hub with the same digest). A single
+  public mirror is not trusted on its own: without a reachable upstream, a
+  digest is accepted only if **two independent mirrors** confirm it;
+- `digest` and `digest_source` are written to the lock. For older locks
+  without digests, a regular converge adds digests for the **already pinned**
+  versions without changing them (`LOCK_DIGESTS_ADDED`; preflight in
+  `check.sh` does the same);
+- the Docker Hub API cross-check is fatal only on a definitive answer ("tag
+  does not exist"); a network failure is a warning;
+- HTTP requests and skopeo calls are retried with backoff.
 
-**Скачивание** (`tools/pull_images.py`, роль `docker`): для каждого компонента
-`docker pull <источник>@<digest>` по очереди из upstream, официального
-альтернативного реестра и зеркал, с таймаутом (`matrix_image_pull_timeout`) и
-повторами; затем `docker tag` в каноничную ссылку, с которой стартуют
-контейнеры, и проверка, что у образа нужный digest. Docker сверяет содержимое с
-digest, поэтому зеркало не может подменить образ. Образ, уже присутствующий
-локально с нужным digest, не скачивается. Если в lock нет digest, зеркала не
-используются.
+**Pulling** (`tools/pull_images.py`, `docker` role): for each component,
+`docker pull <source>@<digest>` is tried in turn from upstream, the official
+alternative registry and the mirrors, with a timeout
+(`matrix_image_pull_timeout`) and retries; then `docker tag` to the canonical
+reference the containers start from, and a check that the image has the
+expected digest. Docker verifies the content against the digest, so a mirror
+cannot substitute the image. An image already present locally with the right
+digest is not pulled again. If the lock has no digest, mirrors are not used.
 
-**Настройка** (`group_vars/all/main.yml`, переопределяется в
+**Configuration** (`group_vars/all/main.yml`, overridable in
 `/etc/matrix-deploy/deployment.yml`):
 
 ```yaml
-matrix_registry_mirrors:        # зеркала по upstream-реестру, только host[:port]
+matrix_registry_mirrors:        # mirrors per upstream registry, host[:port] only
   docker.io: [mirror.gcr.io, dockerhub.timeweb.cloud]
   ghcr.io: [ghcr.nju.edu.cn, ghcr.m.daocloud.io]
-matrix_registry_proxy: ""       # например http://user:pass@proxy:3128
+matrix_registry_proxy: ""       # e.g. http://user:pass@proxy:3128
 matrix_image_pull_timeout: 900
 ```
 
-`matrix_registry_proxy` применяется к dockerd (systemd drop-in
-`docker.service.d/http-proxy.conf`) и к preflight. Открытые публичные
-HTTP-прокси по умолчанию не используются: они нестабильны и видят весь трафик;
-свой прокси задаётся явно. Доступность публичных зеркал для реальных образов
-CI проверяет информационным шагом «Probe public registry mirrors».
+`matrix_registry_proxy` is applied to dockerd (systemd drop-in
+`docker.service.d/http-proxy.conf`) and to preflight. Open public HTTP proxies
+are not used by default: they are unreliable and see all traffic; your own
+proxy has to be set explicitly. CI checks whether the public mirrors serve the
+real images in an informational step, "Probe public registry mirrors".
 
-## Bootstrap и launcher
+## Bootstrap and launcher
 
 `bootstrap.sh`:
 
-1. требует Ubuntu 24.04 LTS (`noble`) и запуск от root;
-2. устанавливает зависимости контроллера, включая `skopeo` для проверки registry;
-3. создаёт `.venv`;
-4. устанавливает зафиксированные версии `ansible-core` и коллекций;
-5. запускает интерактивный launcher `deploy.sh`.
+1. requires Ubuntu 24.04 LTS (`noble`) and running as root;
+2. installs controller dependencies, including `skopeo` for registry checks;
+3. creates `.venv`;
+4. installs the pinned versions of `ansible-core` and the collections;
+5. starts the interactive launcher `deploy.sh`.
 
-Launcher запрашивает:
+The launcher asks for:
 
-- базовый домен и префиксы имён сервисных хостов;
-- email для Let's Encrypt;
-- включение или отключение федерации;
-- подтверждение публичного IPv4;
-- топологию TURN: NAT или прямой публичный IP;
-- начальный пароль администратора Matrix.
+- the base domain and the service hostname prefixes;
+- the Let's Encrypt email;
+- enabling or disabling federation;
+- confirmation of the public IPv4;
+- the TURN topology: NAT or direct public IP;
+- the initial Matrix administrator password.
 
-Он определяет порт активной SSH-сессии, проверяет ввод оператора, сохраняет
-несекретную топологию в `/etc/matrix-deploy/deployment.yml`, запускает preflight,
-разрешает и фиксирует текущие stable-версии в `/etc/matrix-deploy/versions.yml`,
-выводит план развёртывания и требует подтверждения перед запуском основного
-playbook.
+It detects the port of the active SSH session, validates the operator's input,
+saves the non-secret topology to `/etc/matrix-deploy/deployment.yml`, runs
+preflight, resolves and pins the current stable versions in
+`/etc/matrix-deploy/versions.yml`, prints the deployment plan and requires
+confirmation before running the main playbook.
 
-Чтобы только подготовить Ansible-окружение без запуска интерактивного
-развёртывания:
+To only prepare the Ansible environment without starting the interactive
+deployment:
 
 ```bash
 sudo ./bootstrap.sh --prepare-only
 ```
 
-## Контракт preflight
+## Preflight contract
 
-Новое развёртывание отклоняется, если не выполнены базовые предпосылки. Preflight
-проверяет:
+A new deployment is rejected if the basic prerequisites are not met.
+Preflight checks:
 
 - Ubuntu 24.04 LTS;
-- фактические права root;
-- минимальные CPU/RAM/свободное место на диске;
-- корректность публичного и relay IPv4;
-- точное соответствие локального IP выбранному режиму direct-public или NAT;
-- DNS A-записи всех сервисных имён Matrix без лишних дополнительных A-адресов;
-- неожиданные AAAA-записи при отключённом IPv6;
-- конфликты портов на чистом хосте;
-- доступность apt-репозиториев;
-- актуальные stable releases приложений;
-- существование соответствующих Docker image tags;
-- доступность выбранного image для архитектуры текущего хоста;
-- целостность runtime version lock.
+- effective root privileges;
+- minimum CPU/RAM/free disk space;
+- validity of the public and relay IPv4;
+- exact match of the local IP to the selected direct-public or NAT mode;
+- DNS A records for all Matrix service names, with no extra A addresses;
+- unexpected AAAA records when IPv6 is disabled;
+- port conflicts on a clean host;
+- reachability of apt repositories;
+- the latest stable application releases;
+- existence of the corresponding Docker image tags;
+- availability of the selected image for the current host architecture;
+- integrity of the runtime version lock.
 
-Проверка DNS A/AAAA выполняет прямые DNS-запросы, а не использует результат
-NSS-подобного разрешения имён. Поэтому IPv4-mapped IPv6-адреса не могут быть
-ошибочно приняты за опубликованные AAAA-записи.
+The DNS A/AAAA check performs direct DNS queries rather than relying on
+NSS-style name resolution. So IPv4-mapped IPv6 addresses cannot be mistaken
+for published AAAA records.
 
-IPv6 сейчас **не реализован** как production-режим развёртывания. Публикация
-AAAA-записей при `matrix_ipv6_enabled=false` считается ошибкой конфигурации, а не
-игнорируется с видимостью поддержки IPv6.
+IPv6 is currently **not implemented** as a production deployment mode.
+Publishing AAAA records with `matrix_ipv6_enabled=false` is treated as a
+configuration error rather than ignored while pretending to support IPv6.
 
-## Штатные операции: как они устроены
+## Standard operations: how they work
 
-### Повторное применение конфигурации существующей установки
+### Re-applying the configuration of an existing installation
 
 ```bash
 sudo ./converge.sh
 ```
 
-Используются:
+It uses:
 
 ```text
 /etc/matrix-deploy/deployment.yml
 /etc/matrix-deploy/versions.yml
 ```
 
-Preflight проверяет, появились ли новые stable releases upstream, но version lock
-при обычном converge не меняет. Поэтому повторное применение конфигурации не
-является скрытым обновлением приложений.
+Preflight checks whether new stable upstream releases have appeared, but a
+regular converge does not change the version lock. So re-applying the
+configuration is never a hidden application upgrade.
 
-Если существующая учётная запись администратора уже создана, пароль
-администратора Matrix повторно не запрашивается.
+If the administrator account already exists, the Matrix administrator
+password is not asked for again.
 
-Повторный запуск `bootstrap.sh`/`deploy.sh` на хосте, где уже есть
-`/etc/matrix-deploy/deployment.yml`, отклоняется: он перезаписал бы топологию и
-обновил бы версии без backup.
+Running `bootstrap.sh`/`deploy.sh` again on a host that already has
+`/etc/matrix-deploy/deployment.yml` is refused: it would overwrite the
+topology and upgrade versions without a backup.
 
-Если первое развёртывание прервалось после сохранения топологии, но до создания
-начальной учётной записи `@admin`, можно продолжить без повторного ввода
-топологии:
+If the first deployment was interrupted after the topology was saved but
+before the initial `@admin` account was created, you can resume without
+re-entering the topology:
 
 ```bash
 sudo ./converge.sh --admin-password
 ```
 
-Пароль восстановления вводится без отображения, хранится только во временном
-файле в `/run/matrix-deploy/` на время запуска Ansible и удаляется shell trap.
-В `/etc/matrix-deploy` он не сохраняется.
+The recovery password is entered without echo, kept only in a temporary file
+under `/run/matrix-deploy/` for the duration of the Ansible run, and removed
+by a shell trap. It is not stored in `/etc/matrix-deploy`.
 
-Флаг `--refresh-versions` существует для явного обновления lock-файла и обычно
-вызывается через `upgrade.sh`, а не вручную.
+The `--refresh-versions` flag exists for an explicit lock file refresh and is
+normally invoked via `upgrade.sh`, not manually.
 
 ### Ansible check/diff
 
@@ -239,290 +243,294 @@ sudo ./converge.sh --admin-password
 sudo ./check.sh
 ```
 
-`check.sh` намеренно работает только с уже развёрнутой управляемой установкой.
-Перед запуском Ansible он требует существующий `/etc/matrix-deploy/versions.yml`,
-все постоянные сгенерированные секреты и обе полные пары certificate/key. Если
-управляемое состояние неполное, скрипт требует реального converge/recovery.
+`check.sh` deliberately works only with an already deployed managed
+installation. Before running Ansible, it requires an existing
+`/etc/matrix-deploy/versions.yml`, all persistent generated secrets and both
+complete certificate/key pairs. If the managed state is incomplete, the
+script requires a real converge/recovery.
 
-Затем запускается preflight, после него — `site.yml --check --diff`. Preflight
-может проверить наличие более новых upstream releases, но `check.sh` никогда не
-создаёт и не обновляет version lock.
+It then runs preflight, followed by `site.yml --check --diff`. Preflight may
+check for newer upstream releases, but `check.sh` never creates or updates the
+version lock.
 
-Runtime reconciliation и health-check'и, которые невозможно осмысленно
-симулировать, в check mode пропускаются. При этом состояние SAN сертификатов всё
-равно считывается, а playbook сообщает, потребовалась бы reconciliation каждой
-линейки или нет.
+Runtime reconciliation and health checks that cannot be meaningfully
+simulated are skipped in check mode. The certificate SAN state is still read,
+and the playbook reports whether each lineage would need reconciliation.
 
-Check mode — инструмент проверки desired state, а не замена реального converge и
-финального verifier.
+Check mode is a desired-state inspection tool, not a replacement for a real
+converge and the final verifier.
 
-### Проверка состояния
+### State verification
 
 ```bash
 sudo ./verify.sh
 ```
 
-Установленный verifier проверяет системные сервисы, контейнеры, listeners, UFW,
-PostgreSQL, client/federation endpoints Synapse, поведение локальных/закрытых
-метрик, веб-приложения, MatrixRTC discovery, оба TURN-стека, TLS-сертификаты,
-соответствие копий сертификатов, маршрутизацию Certbot/ACME, Fail2ban и синтаксис
-Nginx.
+The installed verifier checks system services, containers, listeners, UFW,
+PostgreSQL, Synapse client/federation endpoints, local/closed metrics
+behavior, web applications, MatrixRTC discovery, both TURN stacks, TLS
+certificates, certificate copy consistency, Certbot/ACME routing, Fail2ban and
+Nginx syntax.
 
-Обычный verifier намеренно **NAT-safe**. Локальные self-check'и сервисов
-подключаются к listeners через `127.0.0.1`, сохраняя корректные HTTP Host и TLS
-SNI. Поэтому NAT-развёртыванию не нужен hairpin NAT только ради проверки
-собственной конфигурации Nginx/TURN.
+The regular verifier is deliberately **NAT-safe**. Local service self-checks
+connect to the listeners via `127.0.0.1` while keeping the correct HTTP Host
+and TLS SNI. So a NAT deployment does not need hairpin NAT just to check its
+own Nginx/TURN configuration.
 
-Это также означает, что обычный verifier не заявляет о подтверждении внешней
-доступности из Интернета. Внешняя федерация, TURN relay и поведение MatrixRTC
-остаются release/integration-тестами.
+This also means the regular verifier does not claim to confirm external
+reachability from the Internet. External federation, TURN relay and MatrixRTC
+behavior remain release/integration tests.
 
-Для более тяжёлой симуляции продления сертификатов:
+For a heavier certificate renewal simulation:
 
 ```bash
 sudo ./verify.sh --deep
 ```
 
-Дополнительно выполняется:
+This additionally runs:
 
 ```text
 certbot renew --dry-run --run-deploy-hooks
 ```
 
-Staging-проверка Certbot проверяет внешнюю доступность ACME и одновременно
-тестирует deploy hooks, привязанные к конкретным certificate lineage.
+The Certbot staging check verifies external ACME reachability and at the same
+time tests the deploy hooks bound to specific certificate lineages.
 
-### Резервное копирование
+### Backups
 
-Обычный backup конфигурации и базы данных:
+Regular backup of configuration and database:
 
 ```bash
 sudo ./backup.sh
 ```
 
-Полный backup с включением media store Synapse:
+Full backup including the Synapse media store:
 
 ```bash
 sudo ./backup.sh --include-media
 ```
 
-Резервные копии сохраняются в `/var/backups/matrix-deploy/<timestamp>/` с режимом
-`0700`. В них входят логический dump PostgreSQL в custom format, управляемые
-секреты и конфигурация, `/etc/matrix-deploy` вместе с deployment/version lock,
-signing key/appservice state Synapse, состояние сертификатов, инвентари
-Docker/UFW и manifest. Для файлов backup принудительно устанавливается режим
-`0600` только для root; это особенно важно для `docker-inspect.json`, который
-может содержать секреты из environment контейнеров.
+Backups are stored in `/var/backups/matrix-deploy/<timestamp>/` with mode
+`0700`. They include a logical PostgreSQL dump in custom format, managed
+secrets and configuration, `/etc/matrix-deploy` together with the
+deployment/version lock, Synapse signing key/appservice state, certificate
+state, Docker/UFW inventories and a manifest. Backup files are forced to
+root-only mode `0600`; this matters especially for `docker-inspect.json`,
+which may contain secrets from container environments.
 
-Сырая директория данных PostgreSQL намеренно не архивируется: PostgreSQL
-резервируется логически через `pg_dump`.
+The raw PostgreSQL data directory is deliberately not archived: PostgreSQL is
+backed up logically via `pg_dump`.
 
-Обычный backup **не включает** потенциально большой media store, если явно не
-указан `--include-media`.
+A regular backup **does not include** the potentially large media store
+unless `--include-media` is given explicitly.
 
-### Явное обновление до актуальных stable-версий upstream
+### Explicit upgrade to the latest stable upstream versions
 
 ```bash
 sudo ./upgrade.sh
 ```
 
-`upgrade.sh` требует подтверждения и сначала создаёт backup. Затем preflight
-заново опрашивает upstream, проверяет registry и **атомарно заменяет**
-`/etc/matrix-deploy/versions.yml` новым exact-набором. Docker-role заранее
-скачивает выбранные image refs, после чего выполняется обычный converge.
+`upgrade.sh` asks for confirmation and creates a backup first. Then preflight
+queries upstream again, verifies the registry and **atomically replaces**
+`/etc/matrix-deploy/versions.yml` with the new exact set. The Docker role
+pre-pulls the selected image refs, and then a regular converge runs.
 
-Это единственный штатный workflow, который намеренно двигает application
-versions вперёд. Обычный `converge.sh` lock не изменяет.
+This is the only standard workflow that deliberately moves application
+versions forward. A regular `converge.sh` does not change the lock.
 
-Major PostgreSQL при этом автоматически не меняется. Для него обновляется только
-stable patch в пределах `postgresql_major`; guard по major version/data directory
-не позволяет молча запустить несовместимую базу.
+The PostgreSQL major is not changed automatically in the process. Only the
+stable patch within `postgresql_major` is updated; the major version/data
+directory guard prevents silently starting an incompatible database.
 
-### Удаление развёртывания
+### Removing the deployment
 
 ```bash
 sudo ./destroy.sh
 ```
 
-Destroy намеренно защищён дополнительными подтверждениями. Требуется ввести
-точные строки:
+Destroy is deliberately protected by extra confirmations. You must type the
+exact strings:
 
 ```text
 BACKUP <matrix-server-name>
 DESTROY <matrix-server-name>
 ```
 
-Перед вторым подтверждением создаётся **полный backup с media store**.
-Destroy удаляет контейнеры и данные Matrix, состояние Matrix в Nginx/Coturn, обе
-certificate lineage Matrix и Matrix-специфичные правила firewall. При этом
-сохраняются:
+A **full backup including the media store** is created before the second
+confirmation. Destroy removes the Matrix containers and data, the Matrix state
+in Nginx/Coturn, both Matrix certificate lineages and the Matrix-specific
+firewall rules. The following are kept:
 
 - `/var/backups/matrix-deploy`;
-- установленные системные пакеты;
-- firewall-доступ по SSH;
-- общие правила firewall для HTTP/HTTPS.
+- installed system packages;
+- SSH firewall access;
+- the general HTTP/HTTPS firewall rules.
 
-Автоматическое восстановление пока намеренно не предоставляется. См.
+Automated restore is deliberately not provided yet. See
 [`RESTORE.md`](RESTORE.md).
 
-## Модель публичной сети
+## Public network model
 
-Публичные порты по умолчанию:
+Default public ports:
 
-| Назначение | Протокол/порт |
+| Purpose | Protocol/port |
 | --- | --- |
 | HTTP / ACME | TCP 80 |
-| HTTPS / веб-вход Matrix | TCP 443 |
-| Федерация, если включена | TCP 8448 |
-| Классический Coturn | TCP+UDP 3478 |
-| Классический Coturn TLS/DTLS | TCP+UDP 5349 |
-| Relay классического Coturn | UDP 57000-57999 |
-| TCP fallback LiveKit RTC | TCP 7881 |
-| Media LiveKit RTC | UDP 62000-62999 |
-| Встроенный TURN LiveKit | UDP 3480 |
-| Встроенный TURN/TLS LiveKit | TCP 5449 |
-| Relay встроенного TURN LiveKit | UDP 63000-63999 |
+| HTTPS / Matrix web entry | TCP 443 |
+| Federation, if enabled | TCP 8448 |
+| Classic Coturn | TCP+UDP 3478 |
+| Classic Coturn TLS/DTLS | TCP+UDP 5349 |
+| Classic Coturn relay | UDP 57000-57999 |
+| LiveKit RTC TCP fallback | TCP 7881 |
+| LiveKit RTC media | UDP 62000-62999 |
+| LiveKit embedded TURN | UDP 3480 |
+| LiveKit embedded TURN/TLS | TCP 5449 |
+| LiveKit embedded TURN relay | UDP 63000-63999 |
 
-Следующие сервисы являются локальными/backend-сервисами и не должны намеренно
-публиковаться через UFW:
+The following are local/backend services and must never be deliberately
+exposed through UFW:
 
 - LiveKit HTTP/API `7880`;
 - Synapse `8008`;
 - PostgreSQL `5432`;
-- loopback-порты Element/Ketesa/Call/JWT `8081-8084`.
+- Element/Ketesa/Call/JWT loopback ports `8081-8084`.
 
-TURN/TLS на публичном TCP 443 не входит в эту архитектуру, поскольку Nginx уже
-занимает 443 на том же публичном IP. Для такого fallback нужен отдельный IP или
-явно спроектированный L4/SNI frontend.
+TURN/TLS on public TCP 443 is not part of this architecture, since Nginx
+already occupies 443 on the same public IP. Such a fallback needs a separate
+IP or a purpose-built L4/SNI frontend.
 
-## Сертификаты
+## Certificates
 
-Используются две lineage Let's Encrypt:
+Two Let's Encrypt lineages are used:
 
-1. SAN-сертификат, именованный по hostname Synapse и покрывающий Synapse, Element,
-   Ketesa, Element Call и LiveKit;
-2. отдельный сертификат классического TURN.
+1. a SAN certificate named after the Synapse hostname and covering Synapse,
+   Element, Ketesa, Element Call and LiveKit;
+2. a separate classic TURN certificate.
 
-Каждый HTTP vhost напрямую обслуживает `/.well-known/acme-challenge/` из общего
-webroot до перенаправления обычного HTTP-трафика. Роль сверяет фактический набор
-SAN, умеет восстанавливать неполную lineage и не использует `creates:` как
-источник истины о состоянии сертификата.
+Every HTTP vhost serves `/.well-known/acme-challenge/` directly from the
+shared webroot before redirecting regular HTTP traffic. The role compares the
+actual SAN set, can recover an incomplete lineage and does not use `creates:`
+as the source of truth for certificate state.
 
-Deploy hook Certbot учитывает конкретную lineage:
+The Certbot deploy hook is lineage-aware:
 
-- при продлении Matrix SAN перезагружается Nginx и обновляется/перезапускается
-  только LiveKit;
-- при продлении TURN обновляется/перезапускается только Coturn.
+- on Matrix SAN renewal, Nginx is reloaded and only LiveKit is
+  refreshed/restarted;
+- on TURN renewal, only Coturn is refreshed/restarted.
 
-LiveKit использует стабильную копию сертификата в `/opt/matrix/livekit/certs`, а
-не bind mount отдельных файлов-целей symlink из Let's Encrypt.
+LiveKit uses a stable certificate copy in `/opt/matrix/livekit/certs` rather
+than bind-mounting individual symlink targets from Let's Encrypt.
 
-## MatrixRTC: как клиенты находят LiveKit
+## MatrixRTC: how clients find LiveKit
 
-Актуальная модель upstream (проверено 2026-09-25 по документации Element Call,
-Synapse 1.161.0 и lk-jwt-service 0.7.0):
+The current upstream model (checked 2026-09-25 against the documentation of
+Element Call, Synapse 1.161.0 and lk-jwt-service 0.7.0):
 
-- **Основной путь** — хоумсервер. `homeserver.yaml` содержит
-  `matrix_rtc.transports`, а `experimental_features.msc4143_enabled` включает
-  эндпоинт `GET /_matrix/client/unstable/org.matrix.msc4143/rtc/transports`
-  (MSC4519, требует токен). Начиная с Element Call v0.24.0 discovery через
-  `.well-known` объявлен устаревшим.
-- **Fallback** — `org.matrix.msc4143.rtc_foci` в `/.well-known/matrix/client`
-  сохраняется для клиентов, которые ещё читают его (Element-клиенты оставили его
-  как запасной путь; Synapse сам этот ключ не генерирует).
-- `livekit_service_url` в `matrix_rtc.transports` устарел в Synapse 1.161.0,
-  но upstream требует оставлять его для совместимости. Новое свойство `url`
-  подразумевает lk-jwt-service в режиме application service (MSC4195/MSC4512),
-  который upstream пока называет экспериментальным, поэтому оно не включено.
-- lk-jwt-service проверяет OpenID-токены пользователей через
-  `/_matrix/federation/v1/openid/userinfo`, находя хоумсервер через
-  `/.well-known/matrix/server`. Поэтому при выключенной федерации Synapse
-  включает listener-ресурс `openid`, а `.well-known/matrix/server` по-прежнему
-  указывает на `:443`; сама федерация остаётся выключенной
-  (`federation_domain_whitelist: []`, ресурса `federation` нет, 8448 закрыт).
-- LiveKit отправляет события участников на `http://127.0.0.1:8084/sfu_webhook`
-  lk-jwt-service (delegated delayed leave, MSC4140); дополнительно включена
-  pull-проверка `LIVEKIT_SANITY_CHECK_INTERVAL_SECONDS=60`.
+- **Primary path** — the homeserver. `homeserver.yaml` contains
+  `matrix_rtc.transports`, and `experimental_features.msc4143_enabled` enables
+  the endpoint `GET /_matrix/client/unstable/org.matrix.msc4143/rtc/transports`
+  (MSC4519, requires a token). Since Element Call v0.24.0, discovery via
+  `.well-known` is deprecated.
+- **Fallback** — `org.matrix.msc4143.rtc_foci` in `/.well-known/matrix/client`
+  is kept for clients that still read it (Element clients kept it as a
+  fallback path; Synapse does not generate this key itself).
+- `livekit_service_url` in `matrix_rtc.transports` is deprecated in Synapse
+  1.161.0, but upstream requires keeping it for compatibility. The new `url`
+  property implies lk-jwt-service in application service mode
+  (MSC4195/MSC4512), which upstream still calls experimental, so it is not
+  enabled.
+- lk-jwt-service validates users' OpenID tokens via
+  `/_matrix/federation/v1/openid/userinfo`, finding the homeserver via
+  `/.well-known/matrix/server`. Therefore, with federation disabled, Synapse
+  still enables the `openid` listener resource, and `.well-known/matrix/server`
+  still points to `:443`; federation itself stays disabled
+  (`federation_domain_whitelist: []`, no `federation` resource, 8448 closed).
+- LiveKit sends participant events to lk-jwt-service at
+  `http://127.0.0.1:8084/sfu_webhook` (delegated delayed leave, MSC4140); a
+  pull-based check `LIVEKIT_SANITY_CHECK_INTERVAL_SECONDS=60` is also enabled.
 
-Verifier проверяет все звенья: transports-эндпоинт (401 без токена = включён),
-OpenID userinfo, `.well-known` fallback и webhook.
+The verifier checks every link: the transports endpoint (401 without a token
+= enabled), OpenID userinfo, the `.well-known` fallback and the webhook.
 
-## Endpoint Synapse Admin
+## Synapse Admin endpoint
 
-Общее правило hardening Synapse — не публиковать лишние endpoints `/_synapse/`.
-Это развёртывание публикует только `/_synapse/client/` и `/_synapse/admin/`, а для
-остального пространства `/_synapse/` возвращает 404.
+The general Synapse hardening rule is not to expose unnecessary `/_synapse/`
+endpoints. This deployment exposes only `/_synapse/client/` and
+`/_synapse/admin/`, and returns 404 for the rest of the `/_synapse/` space.
 
-`/_synapse/admin/` здесь является осознанным архитектурным решением: Ketesa —
-браузерный интерфейс администрирования и ему нужен Synapse Admin API. Доступ всё
-равно требует авторизации администратора Matrix. Метрики Synapse остаются
-закрытыми и проверяются только локально.
+Exposing `/_synapse/admin/` is a deliberate architectural decision: Ketesa is a
+browser-based admin interface and needs the Synapse Admin API. Access still
+requires Matrix administrator authorization. Synapse metrics stay closed and
+are only checked locally.
 
 ## Fail2ban
 
-Первая поддерживаемая политика Fail2ban намеренно консервативна: jail `sshd` с
-автоматически определённым SSH-портом, backend `systemd` и действием через UFW.
+The first supported Fail2ban policy is deliberately conservative: an `sshd`
+jail with the automatically detected SSH port, the `systemd` backend and a
+UFW action.
 
-Matrix/Nginx-специфичные фильтры не включаются, пока их regex не будут проверены
-на реальных логах развёртывания с помощью `fail2ban-regex`. Избежать ложных ban
-важнее, чем добавить непроверенные фильтры.
+Matrix/Nginx-specific filters are not enabled until their regexes have been
+validated against real deployment logs with `fail2ban-regex`. Avoiding false
+bans matters more than adding unverified filters.
 
-## Состояние и секреты
+## State and secrets
 
-Важные пути:
+Important paths:
 
 ```text
-/etc/matrix-deploy/deployment.yml       сохранённая топология и выбор оператора
-/etc/matrix-deploy/versions.yml         exact version lock, выбранный preflight
-/opt/matrix/.secrets/                   сгенерированные исходные секреты (только root)
-/opt/matrix/                            управляемое состояние приложений
+/etc/matrix-deploy/deployment.yml       saved topology and operator choices
+/etc/matrix-deploy/versions.yml         exact version lock selected by preflight
+/opt/matrix/.secrets/                   generated original secrets (root only)
+/opt/matrix/                            managed application state
 /var/www/matrix/                        Matrix well-known + ACME webroot
-/var/backups/matrix-deploy/             защищённые резервные копии
-/usr/local/sbin/matrix-stack-verify     установленный verifier
-/opt/matrix-deploy/                     установленный релиз установщика и CLI matrix-deploy
+/var/backups/matrix-deploy/             protected backups
+/usr/local/sbin/matrix-stack-verify     installed verifier
+/opt/matrix-deploy/                     installed installer release and the matrix-deploy CLI
 ```
 
-Не добавляйте в Git `/etc/matrix-deploy`, `.venv`, сгенерированные секреты,
-сертификаты или архивы backup.
+Do not commit `/etc/matrix-deploy`, `.venv`, generated secrets, certificates
+or backup archives to Git.
 
-Системная учётная запись `matrix` намеренно не входит в группу Docker: доступ к
-Docker socket фактически эквивалентен root и приложениям не требуется.
+The `matrix` system account is deliberately not in the Docker group: access
+to the Docker socket is effectively equivalent to root, and the applications
+do not need it.
 
-## CI и критерии релиза
+## CI and release criteria
 
-GitHub Actions выполняет:
+GitHub Actions runs:
 
-- проверки YAML и статических invariants, включая запрет возвращения hardcoded
-  top-level `*_image` pins в version policy, плавающих `:latest` и известных
-  deprecated-паттернов Ansible;
-- реальный запуск `bootstrap.sh --prepare-only` на Ubuntu 24.04;
-- реальный runtime preflight с запросами к GitHub Releases, Docker Official
-  Images/Docker Hub и registry validation через `skopeo`;
-- проверку, что повторный обычный preflight заново проверяет upstream, но не
-  изменяет SHA существующего `/etc/matrix-deploy/versions.yml`;
-- проверку manifest всех **динамически выбранных** image refs с обязательной
-  поддержкой `linux/amd64` и `linux/arm64`;
-- проверку синтаксиса shell и Python resolver;
-- настоящий NAT-mode preflight на runner Ubuntu 24.04 с DNS A/AAAA-запросами и
-  проверками ресурсов, портов, routing и apt;
-- разбор inventory;
-- `ansible-playbook --syntax-check` для playbook развёртывания, preflight,
-  verification, backup и destroy;
-- реальный рендер Jinja verifier с включённой и отключённой федерацией и
-  `bash -n` для обоих вариантов.
+- YAML and static invariant checks, including a ban on reintroducing
+  hardcoded top-level `*_image` pins in the version policy, floating `:latest`
+  and known deprecated Ansible patterns;
+- a real `bootstrap.sh --prepare-only` run on Ubuntu 24.04;
+- a real runtime preflight querying GitHub Releases, Docker Official
+  Images/Docker Hub and registry validation via `skopeo`;
+- a check that a repeated regular preflight re-checks upstream but does not
+  change the SHA of the existing `/etc/matrix-deploy/versions.yml`;
+- a manifest check of all **dynamically selected** image refs with mandatory
+  `linux/amd64` and `linux/arm64` support;
+- shell and Python resolver syntax checks;
+- a real NAT-mode preflight on an Ubuntu 24.04 runner with DNS A/AAAA queries
+  and resource, port, routing and apt checks;
+- inventory parsing;
+- `ansible-playbook --syntax-check` for the deployment, preflight,
+  verification, backup and destroy playbooks;
+- a real Jinja render of the verifier with federation enabled and disabled,
+  and `bash -n` for both variants.
 
-Версии `ansible-core` и collections по-прежнему фиксируются в репозитории, потому
-что это runtime самого установщика, а не обновляемый Matrix application stack.
-Конфигурация Ansible отключает deprecated top-level fact injection; роли
-используют `ansible_facts[...]`. Сторонние apt-репозитории управляются через
-deb822.
+The `ansible-core` and collection versions are still pinned in the repository,
+because they are the installer's own runtime, not the upgradable Matrix
+application stack. The Ansible configuration disables deprecated top-level
+fact injection; roles use `ansible_facts[...]`. Third-party apt repositories
+are managed via deb822.
 
-Эти CI-gate необходимы, но недостаточны. Динамический resolver подтверждает
-существование и стабильность отдельных upstream releases, но не заменяет
-интеграционную проверку совместимости всего набора как единого стека.
+These CI gates are necessary but not sufficient. The dynamic resolver
+confirms that individual upstream releases exist and are stable, but it does
+not replace an integration check of the whole set's compatibility as a single
+stack.
 
-Перед выпуском релиза нужно пройти оставшиеся release gates из [`ROADMAP.md`](ROADMAP.md):
-полное развёртывание на чистой Ubuntu с реальными DNS/ACME, второй
-converge/idempotence, `check.sh`, reboot, Certbot dry-run, федерацию, классический
-TURN и MatrixRTC-звонки, а также rehearsal backup/destroy/restore до включения
-автоматического восстановления.
+Before publishing a release, the remaining release gates from
+[`ROADMAP.md`](ROADMAP.md) must pass: a full deployment on a clean Ubuntu with
+real DNS/ACME, a second converge/idempotence run, `check.sh`, reboot, Certbot
+dry-run, federation, classic TURN and MatrixRTC calls, and a
+backup/destroy/restore rehearsal before enabling automated restore.

@@ -1,217 +1,219 @@
-# Дорожная карта hardening Matrix Deploy
+# Matrix Deploy hardening roadmap
 
-Этот репозиторий начался с Ansible baseline, импортированного до production-исправлений реального Matrix-стека, выполненных 2026-08-18.
+**English** | [Русский](ru/ROADMAP.md)
 
-Цель остаётся прежней: переиспользуемый установщик для чистого сервера Ubuntu 24.04 LTS. Production-состояние служит эталонной реализацией, а не источником жёстко заданных доменов, IP-адресов, учётных данных или одноразовых предположений о конкретном хосте.
+This repository started from an Ansible baseline imported before the production fixes made to a real Matrix stack on 2026-08-18.
 
-## Инварианты
+The goal remains the same: a reusable installer for a clean Ubuntu 24.04 LTS server. The production state serves as a reference implementation, not as a source of hardcoded domains, IP addresses, credentials or one-off assumptions about a specific host.
 
-- Основная целевая ОС — Ubuntu 24.04 LTS.
-- Повторный запуск playbook должен быть безопасным.
-- Системный Coturn для классических звонков и встроенный TURN LiveKit — отдельные, намеренно независимые TURN-стеки; объединять их нельзя.
-- HTTP/API-порт LiveKit 7880 должен оставаться внутренним; публичной HTTPS-точкой входа является Nginx.
-- Федерация — реальный feature flag и должна последовательно управлять Synapse, Nginx, UFW и verification. Исключение: `.well-known/matrix/server` публикуется всегда, потому что через него lk-jwt-service находит OpenID-эндпоинт для MatrixRTC.
-- Секреты не должны попадать в Git.
-- Перед destructive-операциями и обновлениями существующая установка должна резервироваться.
-- Обычный converge не должен незаметно обновлять application images.
-- Новое развёртывание должно использовать актуальные stable releases upstream, но конкретный deploy обязан оставаться воспроизводимым через exact runtime lock.
-- Major PostgreSQL не должен повышаться автоматически.
+## Invariants
 
-## P0 — исправления, проверенные на production
+- The primary target OS is Ubuntu 24.04 LTS.
+- Re-running the playbook must be safe.
+- The system Coturn for classic calls and LiveKit's embedded TURN are separate, deliberately independent TURN stacks; they must not be merged.
+- LiveKit's HTTP/API port 7880 must stay internal; Nginx is the public HTTPS entry point.
+- Federation is a real feature flag and must consistently control Synapse, Nginx, UFW and verification. Exception: `.well-known/matrix/server` is always published, because lk-jwt-service uses it to find the OpenID endpoint for MatrixRTC.
+- Secrets must never end up in Git.
+- An existing installation must be backed up before destructive operations and upgrades.
+- A regular converge must not silently upgrade application images.
+- A new deployment must use the latest stable upstream releases, but each specific deployment must remain reproducible through an exact runtime lock.
+- The PostgreSQL major version must never be raised automatically.
 
-1. Заменить старый образ Synapse Admin на Ketesa, сохранив существующее имя роли на время функционального рефакторинга.
-2. Перевести lk-jwt-service на безопасную модель конфигурации:
-   - использовать `LIVEKIT_JWT_BIND` вместо deprecated-конфигурации порта;
-   - явно задавать `LIVEKIT_FULL_ACCESS_HOMESERVERS`;
-   - webhook LiveKit -> lk-jwt-service `/sfu_webhook` добавлять только с версии, где он есть в релизе (lk-jwt-service >= 0.7.0; добавлено 2026-09-25).
-3. Сохранить `LiveKit room.auto_create=false`.
-4. Явно задать relay range встроенного TURN LiveKit: 63000-63999/udp.
-5. Сохранить диапазон media LiveKit RTC 62000-62999/udp и TCP fallback 7881/tcp.
-6. Не публиковать LiveKit 7880/tcp через UFW.
-7. Копировать сертификаты Let's Encrypt в стабильную директорию сертификатов LiveKit и монтировать в контейнер именно директорию.
-8. Сделать deploy hook Certbot зависимым от certificate lineage:
-   - Matrix SAN certificate: reload Nginx, обновление/перезапуск только LiveKit;
-   - legacy TURN certificate: обновление/перезапуск только Coturn.
-9. Во всех HTTP vhost напрямую обслуживать `/.well-known/acme-challenge/` из общего webroot до редиректа остального трафика на HTTPS.
-10. Сверять фактический набор SAN сертификата вместо использования только `creates:`.
-11. Ограничить публичную маршрутизацию `/_synapse/` необходимыми client/admin endpoints; метрики оставить закрытыми.
-12. Явно включать метрики Synapse, когда они настроены.
-13. Расширить deny ranges для SSRF-защиты URL preview Synapse.
-14. Добавить точечные `denied-peer` ranges Coturn, не блокируя вслепую все RFC1918-сети.
-15. Создать отдельную роль Fail2ban, начав с базовой защиты SSH; Matrix/Nginx-фильтры включать только после проверки regex на реальных логах.
-16. Заменить исходный verification script на production-проверенную модель verifier: без ANSI escape-последовательностей в non-TTY output, без ложных ошибок `pipefail`/`grep -q` и с явной проверкой обоих TURN-стеков.
+## P0 — fixes proven in production
+
+1. Replace the old Synapse Admin image with Ketesa, keeping the existing role name for the duration of the functional refactoring.
+2. Move lk-jwt-service to a secure configuration model:
+   - use `LIVEKIT_JWT_BIND` instead of the deprecated port configuration;
+   - set `LIVEKIT_FULL_ACCESS_HOMESERVERS` explicitly;
+   - add the LiveKit -> lk-jwt-service `/sfu_webhook` webhook only from the release that ships it (lk-jwt-service >= 0.7.0; added 2026-09-25).
+3. Keep `LiveKit room.auto_create=false`.
+4. Set LiveKit's embedded TURN relay range explicitly: 63000-63999/udp.
+5. Keep the LiveKit RTC media range 62000-62999/udp and the TCP fallback 7881/tcp.
+6. Do not expose LiveKit 7880/tcp through UFW.
+7. Copy Let's Encrypt certificates into a stable LiveKit certificate directory and mount that directory into the container.
+8. Make the Certbot deploy hook depend on the certificate lineage:
+   - Matrix SAN certificate: reload Nginx, refresh/restart LiveKit only;
+   - legacy TURN certificate: refresh/restart Coturn only.
+9. In every HTTP vhost, serve `/.well-known/acme-challenge/` directly from the shared webroot before redirecting the rest of the traffic to HTTPS.
+10. Compare the certificate's actual SAN set instead of relying on `creates:` alone.
+11. Restrict public routing of `/_synapse/` to the required client/admin endpoints; keep metrics closed.
+12. Enable Synapse metrics explicitly when they are configured.
+13. Extend the deny ranges for Synapse URL preview SSRF protection.
+14. Add targeted Coturn `denied-peer` ranges without blindly blocking all RFC1918 networks.
+15. Create a separate Fail2ban role, starting with basic SSH protection; enable Matrix/Nginx filters only after validating the regexes against real logs.
+16. Replace the original verification script with the production-proven verifier model: no ANSI escape sequences in non-TTY output, no false `pipefail`/`grep -q` errors, and explicit checks of both TURN stacks.
 
 ## PostgreSQL
 
-- Заменить неиспользуемую/агрессивную модель tuning на детерминированную конфигурацию под управлением Ansible.
-- Использовать консервативные defaults с учётом ресурсов; не задавать огромный `work_mem` на каждую операцию.
-- Исправить readiness-логику PostgreSQL: проверять результат модуля, а не общий успех task.
-- Добавить guard major-version/data-directory перед обновлением контейнера.
-- Сохранить поведение PostgreSQL 18 с `PGDATA=/var/lib/postgresql/data/pgdata`.
-- Resolver версий должен автоматически двигаться только по stable patch releases внутри `postgresql_major`; смена major остаётся отдельной миграцией.
+- Replace the unused/aggressive tuning model with a deterministic, Ansible-managed configuration.
+- Use conservative, resource-aware defaults; do not set a huge per-operation `work_mem`.
+- Fix the PostgreSQL readiness logic: check the module result, not just the task's overall success.
+- Add a major-version/data-directory guard before updating the container.
+- Keep the PostgreSQL 18 behavior with `PGDATA=/var/lib/postgresql/data/pgdata`.
+- The version resolver must only move automatically through stable patch releases within `postgresql_major`; a major change remains a separate migration.
 
-## Версии и обновления
+## Versions and upgrades
 
-Целевая модель больше не предполагает ручное обновление release tags в Git каждые несколько недель.
+The target model no longer requires manually bumping release tags in Git every few weeks.
 
-- `ansible/inventory/group_vars/all/versions.yml` содержит **политику источников**, а не текущие application versions.
-- Для приложений latest stable release определяется через GitHub Releases.
-- Docker Hub images дополнительно сверяются через Docker Hub API.
-- Все Docker Hub/GHCR refs проверяются через registry inspection для архитектуры хоста.
-- Для PostgreSQL используется metadata Docker Official Images и выбирается последний stable patch в разрешённом major.
-- Результат preflight сохраняется как exact runtime lock `/etc/matrix-deploy/versions.yml`.
-- Docker-role заранее скачивает именно exact refs из lock до запуска application stack.
-- Обычный `converge.sh` проверяет upstream, но не меняет lock.
-- `upgrade.sh` сначала создаёт backup, затем явно обновляет lock и применяет новый набор.
-- При недоступности upstream обычный converge может продолжать работать с существующим lock; fresh deploy/explicit upgrade должны завершаться ошибкой, если новый набор невозможно надёжно разрешить и проверить.
-- `site.yml` не должен выполнять deployment mutation без валидного version lock.
-- Плавающие `:latest` в runtime lock и hardcoded top-level `*_image` pins в repository policy запрещены static checks.
-- CI должен реально выполнять resolver, проверять exact refs и multiarch manifests.
-- CI должен доказывать, что повторный обычный preflight не переписывает существующий lock.
-- Версии `ansible-core` и collections остаются зафиксированными как runtime самого установщика и обновляются отдельно после compatibility validation.
-- Не использовать deprecated top-level injection Ansible facts; роли должны обращаться через `ansible_facts[...]`, а injection должна быть отключена.
-- Сторонние apt-репозитории должны управляться через deb822 sources, а не deprecated task `apt_repository`.
+- `ansible/inventory/group_vars/all/versions.yml` holds the **source policy**, not the current application versions.
+- For applications, the latest stable release is determined via GitHub Releases.
+- Docker Hub images are additionally cross-checked via the Docker Hub API.
+- All Docker Hub/GHCR refs are verified via registry inspection for the host architecture.
+- For PostgreSQL, Docker Official Images metadata is used and the latest stable patch within the allowed major is selected.
+- The preflight result is saved as the exact runtime lock `/etc/matrix-deploy/versions.yml`.
+- The Docker role pre-pulls exactly the refs from the lock before starting the application stack.
+- A regular `converge.sh` checks upstream but does not change the lock.
+- `upgrade.sh` first creates a backup, then explicitly refreshes the lock and applies the new set.
+- If upstream is unreachable, a regular converge may keep working with the existing lock; a fresh deploy/explicit upgrade must fail if the new set cannot be reliably resolved and verified.
+- `site.yml` must not perform deployment mutations without a valid version lock.
+- Floating `:latest` in the runtime lock and hardcoded top-level `*_image` pins in the repository policy are forbidden by static checks.
+- CI must actually run the resolver and verify exact refs and multiarch manifests.
+- CI must prove that a repeated regular preflight does not rewrite an existing lock.
+- The `ansible-core` and collection versions stay pinned as the installer's own runtime and are updated separately after compatibility validation.
+- Do not use deprecated top-level injection of Ansible facts; roles must use `ansible_facts[...]`, and injection must be disabled.
+- Third-party apt repositories must be managed via deb822 sources rather than the deprecated `apt_repository` task.
 
-## Nginx и ACME
+## Nginx and ACME
 
-- Гарантировать фактический reload bootstrap-конфигурации Nginx до первого запуска Certbot.
-- Проверять HTTP-01 routing до запроса сертификатов у Let's Encrypt.
-- Сохранить общий SAN-сертификат для Synapse, Element, Ketesa, Element Call и LiveKit.
-- TURN-сертификат оставить отдельной lineage.
-- Добавить deep verification workflow для `certbot renew --dry-run --run-deploy-hooks`, а не запускать его при каждом converge.
+- Guarantee an actual reload of the bootstrap Nginx configuration before the first Certbot run.
+- Check HTTP-01 routing before requesting certificates from Let's Encrypt.
+- Keep a shared SAN certificate for Synapse, Element, Ketesa, Element Call and LiveKit.
+- Keep the TURN certificate as a separate lineage.
+- Add a deep verification workflow for `certbot renew --dry-run --run-deploy-hooks` instead of running it on every converge.
 
 ## LiveKit / MatrixRTC
 
-- Discovery транспорта (с 2026-09): основной путь — эндпоинт хоумсервера `GET /_matrix/client/unstable/org.matrix.msc4143/rtc/transports` (MSC4519) из `matrix_rtc.transports` в `homeserver.yaml`; `.well-known` `org.matrix.msc4143.rtc_foci` — только deprecated fallback для клиентов (Element Call v0.24.0).
-- `matrix_rtc.transports[].livekit_service_url` deprecated с Synapse 1.161.0, но обязателен для обратной совместимости. Новое свойство `url` включать только вместе с режимом application service у lk-jwt-service (MSC4195/MSC4512) — upstream пока помечает его experimental.
-- lk-jwt-service проверяет OpenID-токены через `/_matrix/federation/v1/openid/userinfo`, находя хоумсервер через `.well-known/matrix/server` (иначе `:8448`). Поэтому при выключенной федерации нужны listener `openid` и `m.server` в `.well-known/matrix/server`.
+- Transport discovery (since 2026-09): the primary path is the homeserver endpoint `GET /_matrix/client/unstable/org.matrix.msc4143/rtc/transports` (MSC4519) from `matrix_rtc.transports` in `homeserver.yaml`; the `.well-known` `org.matrix.msc4143.rtc_foci` is only a deprecated client fallback (Element Call v0.24.0).
+- `matrix_rtc.transports[].livekit_service_url` is deprecated since Synapse 1.161.0 but required for backward compatibility. The new `url` property should only be enabled together with lk-jwt-service's application service mode (MSC4195/MSC4512) — upstream still marks it experimental.
+- lk-jwt-service validates OpenID tokens via `/_matrix/federation/v1/openid/userinfo`, finding the homeserver via `.well-known/matrix/server` (otherwise `:8448`). Therefore, with federation disabled, the `openid` listener and `m.server` in `.well-known/matrix/server` are still required.
 - `room.auto_create=false`.
-- `LIVEKIT_FULL_ACCESS_HOMESERVERS` должен содержать только локальное Matrix server name и необходимые локальные domain aliases.
-- Встроенный TURN: 3480/udp, 5449/tcp, relay 63000-63999/udp.
-- RTC: 7881/tcp и 62000-62999/udp.
-- Публичный вход через Nginx остаётся на 443; TURN/TLS на 443 — отдельная архитектурная задача, требующая другого IP или L4/SNI routing.
+- `LIVEKIT_FULL_ACCESS_HOMESERVERS` must contain only the local Matrix server name and the required local domain aliases.
+- Embedded TURN: 3480/udp, 5449/tcp, relay 63000-63999/udp.
+- RTC: 7881/tcp and 62000-62999/udp.
+- The public entry point via Nginx stays on 443; TURN/TLS on 443 is a separate architectural task that requires another IP or L4/SNI routing.
 
-## Классический Coturn
+## Classic Coturn
 
-- Сохранить порты 3478/tcp+udp, 5349/tcp+udp и relay 57000-57999/udp.
-- Различать установки с прямым публичным IP и установки за NAT. Нельзя универсально считать, что `relay-ip == external-ip`.
-- Проверять relay отдельно от встроенного TURN LiveKit.
+- Keep ports 3478/tcp+udp, 5349/tcp+udp and relay 57000-57999/udp.
+- Distinguish installations with a direct public IP from installations behind NAT. Never assume universally that `relay-ip == external-ip`.
+- Verify the relay separately from LiveKit's embedded TURN.
 
 ## Synapse
 
-- Сделать `synapse_enable_federation` реальным end-to-end switch либо удалить его; предпочтительно протянуть его через все связанные роли.
-- Сделать operational policy явными переменными (`report_stats`, политика user-directory, metrics).
-- Сохранять текущие настройки MatrixRTC delayed events и rate limits, пока upstream requirements не изменятся.
-- Заменить filesystem marker администратора как source of truth реальной проверкой состояния Synapse/user.
+- Make `synapse_enable_federation` a real end-to-end switch or remove it; preferably wire it through all related roles.
+- Make operational policy explicit variables (`report_stats`, user-directory policy, metrics).
+- Keep the current MatrixRTC delayed events and rate limit settings until upstream requirements change.
+- Replace the administrator's filesystem marker as the source of truth with a real check of Synapse/user state.
 
-## Firewall и IPv6
+## Firewall and IPv6
 
-- Формировать firewall rules из единой модели переменных вместо дублирующихся жёстко заданных списков.
-- Определять активный SSH-порт до включения deny-incoming policy UFW.
-- Применять базовую firewall policy достаточно рано, чтобы сервисы не оказывались публично доступны во время развёртывания.
-- Рассматривать IPv6 как явно поддерживаемый или неподдерживаемый режим. AAAA-запись при отключённом IPv6 должна выявляться preflight, а не молча приниматься.
+- Build firewall rules from a single variable model instead of duplicated hardcoded lists.
+- Detect the active SSH port before enabling UFW's deny-incoming policy.
+- Apply the baseline firewall policy early enough that services are never publicly reachable during deployment.
+- Treat IPv6 as an explicitly supported or unsupported mode. An AAAA record with IPv6 disabled must be caught by preflight, not silently accepted.
 
-## Bootstrap / UX оператора
+## Bootstrap / operator UX
 
-Добавить operator-facing bootstrap/launcher вокруг Ansible, который до развёртывания выполняет:
+Add an operator-facing bootstrap/launcher around Ansible that, before deployment, performs:
 
-- проверку Ubuntu/version и privileges;
-- проверку RAM/CPU/disk;
-- проверку internet/apt/dependencies;
-- определение внешнего IPv4 с подтверждением оператором;
-- генерацию и подтверждение domain/FQDN;
-- проверку A/AAAA;
-- проверку конфликтов локальных портов;
-- определение NAT/direct-public;
-- определение SSH-порта;
-- обнаружение существующей installation/config/certificates;
-- определение и registry-validation актуальных stable application versions;
-- сохранение exact version lock;
-- вывод явного deployment plan и запрос подтверждения.
+- Ubuntu/version and privilege checks;
+- RAM/CPU/disk checks;
+- internet/apt/dependency checks;
+- external IPv4 detection with operator confirmation;
+- domain/FQDN generation and confirmation;
+- A/AAAA checks;
+- local port conflict checks;
+- NAT/direct-public detection;
+- SSH port detection;
+- detection of an existing installation/config/certificates;
+- resolution and registry validation of the latest stable application versions;
+- saving the exact version lock;
+- printing an explicit deployment plan and asking for confirmation.
 
-Bootstrap остаётся orchestration UX; логика Matrix-сервисов должна находиться в Ansible roles.
+Bootstrap remains orchestration UX; the Matrix service logic must live in Ansible roles.
 
 ## Lifecycle workflows
 
-Предоставить явные workflows для backup, upgrade, rollback metadata и destroy. Destroy должен требовать строгого подтверждения и не должен незаметно удалять последнюю резервную копию. Runtime version lock входит в operational state и должен попадать в backup/restore.
+Provide explicit workflows for backup, upgrade, rollback metadata and destroy. Destroy must require strict confirmation and must not silently delete the latest backup. The runtime version lock is part of the operational state and must be included in backup/restore.
 
-## Критерии проверки
+## Acceptance criteria
 
-Перед тем как считать релиз-кандидат завершённым, нужно пройти:
+Before a release candidate is considered complete, it must pass:
 
 1. syntax/static checks;
-2. runtime resolution stable-версий и проверку registry;
-3. развёртывание на чистой Ubuntu 24.04;
-4. второй запуск Ansible без непредусмотренных изменений и без изменения version lock;
-5. проверку desired state установленного хоста через `check.sh`;
-6. тест сохранения состояния после reboot;
-7. Certbot dry-run с deploy hooks;
-8. проверку входящей и исходящей федерации;
-9. проверку relay классического TURN;
-10. локальные и federated MatrixRTC audio/video calls, по возможности с проверкой встроенного TURN relay;
-11. rehearsal backup/destroy/restore на disposable host;
-12. финальный verifier без обязательных FAIL.
+2. runtime resolution of stable versions and registry verification;
+3. deployment on a clean Ubuntu 24.04;
+4. a second Ansible run without unintended changes and without changing the version lock;
+5. a desired-state check of the installed host via `check.sh`;
+6. a state persistence test after reboot;
+7. a Certbot dry-run with deploy hooks;
+8. inbound and outbound federation checks;
+9. a classic TURN relay check;
+10. local and federated MatrixRTC audio/video calls, ideally with verification of the embedded TURN relay;
+11. a backup/destroy/restore rehearsal on a disposable host;
+12. a final verifier run with no required FAILs.
 
-## Статус реализации (v1.0.0)
+## Implementation status (v1.0.0)
 
-### Реализовано в коде
+### Implemented in code
 
-- [x] Универсальная модель topology/subdomains; в исполняемом коде нет hard-coded production domain/IP.
-- [x] Динамический resolver актуальных stable application releases через GitHub Releases + Docker Official Images/Docker Hub + registry validation.
-- [x] Exact runtime version lock `/etc/matrix-deploy/versions.yml`; application release tags больше не требуют ручного изменения в репозитории.
-- [x] PostgreSQL автоматически обновляется только внутри разрешённого major.
-- [x] Docker-role заранее скачивает exact image refs из lock до запуска application stack.
-- [x] Обычный converge не переписывает lock; explicit upgrade выполняет backup -> refresh lock -> converge.
-- [x] CI реально выполняет dynamic resolver и проверяет каждый выбранный image в registry, включая manifest linux/amd64 и linux/arm64.
-- [x] Static checks запрещают возврат hardcoded top-level application image pins и `:latest`.
-- [x] Зафиксированы версии controller/collections для воспроизводимости самого установщика.
-- [x] Интерактивный bootstrap/launcher с сохранением topology, input validation и preflight.
-- [x] CI реально запускает `bootstrap.sh --prepare-only` на runner Ubuntu 24.04.
-- [x] CI реально запускает NAT-mode preflight с настоящим DNS A/AAAA resolution и проверками ресурсов, портов, routing и apt.
-- [x] Различаются direct-public/NAT, проверяется точное соответствие local IP и определяется порт активной SSH-сессии.
-- [x] DNS validation использует прямые A/AAAA queries, поэтому IPv4-mapped результаты NSS не вызывают ложных AAAA failures.
-- [x] Явное поведение при отключённом IPv6 с запретом неожиданных AAAA.
-- [x] Ansible roles используют `ansible_facts[...]`, deprecated top-level fact injection отключена.
-- [x] Docker и Nginx repositories используют `deb822_repository`; deprecated `apt_repository` запрещён static check.
-- [x] Детерминированная конфигурация PostgreSQL, консервативный tuning и major-version guard.
-- [x] Настроены Synapse policy/metrics/federation и database-backed reconciliation администратора.
-- [x] Recovery path для частичного deployment с временной передачей секрета через `converge.sh --admin-password`.
-- [x] Исправлен Element permalink и выполнен переход на Ketesa.
-- [x] Production-проверенная security model LiveKit/JWT MatrixRTC и явный relay range встроенного TURN.
-- [x] Независимый hardened-контур классического Coturn с поддержкой NAT mapping.
-- [x] ACME-safe bootstrap/production routing Nginx, SAN reconciliation, recovery неполной lineage и selective deploy hook.
-- [x] Desired-state UFW, включая удаление устаревшего публичного правила 7880.
-- [x] Отдельная роль Fail2ban с базовым SSH jail и обработкой race control socket.
-- [x] Production-проверенный параметризованный verifier и необязательный deep Certbot renewal test.
-- [x] NAT-safe self-verification через loopback с корректными Host/SNI без требования hairpin NAT.
-- [x] Ограничены Docker container logs; service account Matrix не получает привилегии через группу Docker.
-- [x] `converge.sh`, check-mode-aware `check.sh`, backup-first `upgrade.sh` и защищённый `destroy.sh`.
-- [x] Защищённый формат backup с root-only artifacts; destructive destroy требует полный backup с media Synapse.
-- [x] GitHub Actions gate для static/YAML/shell/Python/Ansible syntax.
-- [x] CI рендерит и shell-валидирует варианты verifier с включённой и отключённой федерацией.
-- [x] README оператора и явный restore runbook/contract.
-- [x] Установка одной командой из stable GitHub Release (`install.sh`, проверка SHA-256, `bootstrap.sh --install`) и CLI `matrix-deploy` поверх converge/upgrade/verify/check/backup/destroy; `matrix-deploy update` с откатом при неудачной подготовке нового релиза.
-- [x] Повторный `deploy.sh` поверх существующей установки отклоняется (нет скрытого перезаписывания топологии и обновления lock без backup).
-- [x] При отключённой федерации Synapse блокирует и исходящую федерацию (`federation_domain_whitelist: []`); verifier не требует метрик при `synapse_enable_metrics=false`.
-- [x] MatrixRTC приведён к актуальной модели upstream (2026-09-25): discovery через `rtc/transports` хоумсервера, `.well-known` как fallback; OpenID для lk-jwt-service работает и при выключенной федерации; LiveKit webhook -> `/sfu_webhook` для delegated leave; конфиги Element Web/Element Call/Ketesa по текущим схемам; verifier проверяет transports, OpenID и webhook.
-- [x] `min_version` в политике версий: resolver не выбирает версии ниже проверенных, converge отказывается применять конфиг к более старому lock (нужен `upgrade.sh`).
+- [x] Universal topology/subdomain model; no hardcoded production domain/IP in executable code.
+- [x] Dynamic resolver for the latest stable application releases via GitHub Releases + Docker Official Images/Docker Hub + registry validation.
+- [x] Exact runtime version lock `/etc/matrix-deploy/versions.yml`; application release tags no longer require manual changes in the repository.
+- [x] PostgreSQL is upgraded automatically only within the allowed major.
+- [x] The Docker role pre-pulls exact image refs from the lock before starting the application stack.
+- [x] A regular converge does not rewrite the lock; an explicit upgrade does backup -> refresh lock -> converge.
+- [x] CI actually runs the dynamic resolver and verifies every selected image in the registry, including linux/amd64 and linux/arm64 manifests.
+- [x] Static checks forbid reintroducing hardcoded top-level application image pins and `:latest`.
+- [x] Controller/collection versions are pinned for reproducibility of the installer itself.
+- [x] Interactive bootstrap/launcher with topology persistence, input validation and preflight.
+- [x] CI actually runs `bootstrap.sh --prepare-only` on an Ubuntu 24.04 runner.
+- [x] CI actually runs NAT-mode preflight with real DNS A/AAAA resolution and resource, port, routing and apt checks.
+- [x] Direct-public and NAT are distinguished, the local IP is matched exactly, and the port of the active SSH session is detected.
+- [x] DNS validation uses direct A/AAAA queries, so IPv4-mapped NSS results do not cause false AAAA failures.
+- [x] Explicit behavior with IPv6 disabled, rejecting unexpected AAAA records.
+- [x] Ansible roles use `ansible_facts[...]`; deprecated top-level fact injection is disabled.
+- [x] Docker and Nginx repositories use `deb822_repository`; the deprecated `apt_repository` is forbidden by a static check.
+- [x] Deterministic PostgreSQL configuration, conservative tuning and a major-version guard.
+- [x] Synapse policy/metrics/federation and database-backed administrator reconciliation are configured.
+- [x] Recovery path for a partial deployment with temporary secret handoff via `converge.sh --admin-password`.
+- [x] Element permalink fixed and migration to Ketesa done.
+- [x] Production-proven LiveKit/JWT MatrixRTC security model and an explicit embedded TURN relay range.
+- [x] Independent hardened classic Coturn setup with NAT mapping support.
+- [x] ACME-safe bootstrap/production Nginx routing, SAN reconciliation, recovery of incomplete lineages and a selective deploy hook.
+- [x] Desired-state UFW, including removal of the stale public 7880 rule.
+- [x] Separate Fail2ban role with a basic SSH jail and handling of the control socket race.
+- [x] Production-proven parameterized verifier and an optional deep Certbot renewal test.
+- [x] NAT-safe self-verification over loopback with correct Host/SNI, without requiring hairpin NAT.
+- [x] Docker container logs are limited; the Matrix service account does not get privileges via the Docker group.
+- [x] `converge.sh`, check-mode-aware `check.sh`, backup-first `upgrade.sh` and a protected `destroy.sh`.
+- [x] Protected backup format with root-only artifacts; destructive destroy requires a full backup including Synapse media.
+- [x] GitHub Actions gate for static/YAML/shell/Python/Ansible syntax.
+- [x] CI renders and shell-validates verifier variants with federation enabled and disabled.
+- [x] Operator README and an explicit restore runbook/contract.
+- [x] One-command installation from a stable GitHub Release (`install.sh`, SHA-256 verification, `bootstrap.sh --install`) and the `matrix-deploy` CLI on top of converge/upgrade/verify/check/backup/destroy; `matrix-deploy update` with rollback if preparing the new release fails.
+- [x] Re-running `deploy.sh` on top of an existing installation is refused (no hidden topology overwrite or lock refresh without a backup).
+- [x] With federation disabled, Synapse also blocks outbound federation (`federation_domain_whitelist: []`); the verifier does not require metrics when `synapse_enable_metrics=false`.
+- [x] MatrixRTC brought in line with the current upstream model (2026-09-25): discovery via the homeserver's `rtc/transports`, `.well-known` as a fallback; OpenID for lk-jwt-service works with federation disabled too; LiveKit webhook -> `/sfu_webhook` for delegated leave; Element Web/Element Call/Ketesa configs follow current schemas; the verifier checks transports, OpenID and the webhook.
+- [x] `min_version` in the version policy: the resolver never selects versions below the tested ones, and converge refuses to apply the config to an older lock (`upgrade.sh` is required).
 
-### Намеренно отложено до integration testing
+### Deliberately deferred until integration testing
 
-- [ ] Автоматический `restore.sh`. Формат backup и последовательность restore документированы, но automation не включается до успешного полного destroy/restore test.
-- [ ] Matrix/Nginx-фильтры Fail2ban. Добавлять только после проверки `fail2ban-regex` на реальных логах.
-- [ ] Полноценный режим развёртывания IPv6.
-- [ ] TURN/TLS на публичном TCP 443; нужен отдельный IP или специально спроектированный L4/SNI frontend.
+- [ ] Automated `restore.sh`. The backup format and restore sequence are documented, but automation is not enabled until a full destroy/restore test passes.
+- [ ] Fail2ban Matrix/Nginx filters. Add only after validating `fail2ban-regex` against real logs.
+- [ ] A full IPv6 deployment mode.
+- [ ] TURN/TLS on public TCP 443; requires a separate IP or a purpose-built L4/SNI frontend.
 
-### Release gates, для которых всё ещё нужен disposable/реальный Ubuntu-хост
+### Release gates that still need a disposable/real Ubuntu host
 
-- [x] Полная чистая установка Ubuntu 24.04 через `bootstrap.sh` с реальными DNS проекта и Let's Encrypt, используя динамически выбранный exact version lock.
-- [ ] Второй запуск `converge.sh` без непредусмотренных изменений и без изменения lock.
-- [ ] `check.sh` на установленном хосте; проверить полезность diff и отсутствие ложных runtime failures.
-- [ ] Reboot и проверка persistence.
-- [ ] `verify.sh --deep` / staging renewal Certbot на clean-host deployment.
-- [x] Проверка входящей и исходящей федерации, если она включена (приглашения и комнаты с другим сервером).
-- [ ] Authenticated relay test классического Coturn.
-- [x] MatrixRTC audio/video calls между клиентами из разных сетей. Отдельная проверка embedded TURN relay ещё не проводилась.
-- [ ] Полный rehearsal backup -> destroy -> restore до включения автоматического restore; восстановить именно сохранённый version lock, а не молча выбирать новые версии во время disaster recovery.
-- [ ] Финальный verifier без обязательных FAIL на release-candidate host.
+- [x] Full clean Ubuntu 24.04 installation via `bootstrap.sh` with the project's real DNS and Let's Encrypt, using a dynamically selected exact version lock.
+- [ ] A second `converge.sh` run without unintended changes and without changing the lock.
+- [ ] `check.sh` on an installed host; confirm the diff is useful and there are no false runtime failures.
+- [ ] Reboot and persistence check.
+- [ ] `verify.sh --deep` / Certbot staging renewal on a clean-host deployment.
+- [x] Inbound and outbound federation checks when enabled (invites and rooms with another server).
+- [ ] Authenticated relay test of classic Coturn.
+- [x] MatrixRTC audio/video calls between clients on different networks. A dedicated check of the embedded TURN relay has not been done yet.
+- [ ] A full backup -> destroy -> restore rehearsal before enabling automated restore; restore exactly the saved version lock rather than silently selecting new versions during disaster recovery.
+- [ ] A final verifier run with no required FAILs on a release-candidate host.
