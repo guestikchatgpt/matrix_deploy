@@ -1,5 +1,5 @@
 ---
-- name: Создать директорию Element Call
+- name: Create Element Call directory
   ansible.builtin.file:
     path: "{{ element_call_root }}"
     state: directory
@@ -7,7 +7,7 @@
     group: "{{ matrix_system_group }}"
     mode: "0755"
 
-- name: Создать config.json для Element Call
+- name: Create Element Call config.json
   ansible.builtin.template:
     src: config.json.j2
     dest: "{{ element_call_root }}/config.json"
@@ -16,7 +16,7 @@
     mode: "0644"
   notify: Restart Element Call
 
-- name: Развернуть контейнер Element Call
+- name: Deploy Element Call container
   community.docker.docker_container:
     name: element-call
     image: "{{ element_call_image }}"

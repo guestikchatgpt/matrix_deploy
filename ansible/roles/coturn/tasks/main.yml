@@ -1,11 +1,11 @@
 ---
-- name: Установить coturn
+- name: Install coturn
   ansible.builtin.apt:
     name: coturn
     state: present
     update_cache: true
 
-- name: Создать каталог логов coturn
+- name: Create coturn log directory
   ansible.builtin.file:
     path: /var/log/turnserver
     state: directory
@@ -13,17 +13,17 @@
     group: turnserver
     mode: "0750"
 
-- name: Сгенерировать пароль для CLI coturn
+- name: Generate coturn CLI password
   ansible.builtin.set_fact:
     coturn_cli_password: "{{ lookup('password', matrix_root_dir + '/.secrets/coturn_cli length=32 chars=ascii_letters,digits') }}"
   no_log: true
 
-- name: Создать dhparam для TLS
+- name: Generate dhparam for TLS
   ansible.builtin.command:
     cmd: openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048
     creates: /etc/ssl/certs/dhparam.pem
 
-- name: Создать директорию для сертификатов Coturn
+- name: Create Coturn certificate directory
   ansible.builtin.file:
     path: /etc/turnserver/certs
     state: directory
@@ -31,7 +31,7 @@
     group: turnserver
     mode: "0750"
 
-- name: Скопировать fullchain для Coturn
+- name: Copy fullchain for Coturn
   ansible.builtin.copy:
     src: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/fullchain.pem"
     dest: "{{ coturn_cert_path }}"
@@ -41,7 +41,7 @@
     remote_src: true
   notify: Restart coturn
 
-- name: Скопировать privkey для Coturn
+- name: Copy privkey for Coturn
   ansible.builtin.copy:
     src: "/etc/letsencrypt/live/{{ matrix_domains.turn }}/privkey.pem"
     dest: "{{ coturn_key_path }}"
@@ -51,7 +51,7 @@
     remote_src: true
   notify: Restart coturn
 
-- name: Включить системный сервис coturn
+- name: Enable coturn system service
   ansible.builtin.lineinfile:
     path: /etc/default/coturn
     regexp: '^TURNSERVER_ENABLED='
@@ -74,7 +74,7 @@
   ansible.builtin.set_fact:
     coturn_matrix_docker_peer_range: "{{ coturn_matrix_docker_peer_range_cmd.stdout | trim }}"
 
-- name: Сконфигурировать coturn
+- name: Configure coturn
   ansible.builtin.template:
     src: turnserver.conf.j2
     dest: /etc/turnserver.conf
@@ -83,10 +83,10 @@
     mode: "0640"
   notify: Restart coturn
 
-- name: Применить изменения Coturn немедленно
+- name: Apply Coturn changes immediately
   ansible.builtin.meta: flush_handlers
 
-- name: Убедиться что coturn запущен
+- name: Ensure coturn is running
   ansible.builtin.service:
     name: coturn
     state: started

@@ -1,10 +1,10 @@
 ---
-- name: Обновить кеш apt
+- name: Update apt cache
   ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 86400
 
-- name: Установить базовые пакеты
+- name: Install base packages
   ansible.builtin.apt:
     name:
       - ca-certificates
@@ -19,17 +19,17 @@
       - acl
       - openssl
 
-- name: Установить Python SDK Docker
+- name: Install Docker Python SDK
   ansible.builtin.apt:
     name: python3-docker
     state: present
 
-- name: Создать системную группу Matrix
+- name: Create Matrix system group
   ansible.builtin.group:
     name: "{{ matrix_system_group }}"
     system: true
 
-- name: Создать системного пользователя Matrix
+- name: Create Matrix system user
   ansible.builtin.user:
     name: "{{ matrix_system_user }}"
     group: "{{ matrix_system_group }}"
@@ -37,7 +37,7 @@
     system: true
     create_home: false
 
-- name: Создать корневую директорию стека
+- name: Create stack root directory
   ansible.builtin.file:
     path: "{{ matrix_root_dir }}"
     state: directory
@@ -45,7 +45,7 @@
     group: "{{ matrix_system_group }}"
     mode: "0750"
 
-- name: Создать директорию для секретов
+- name: Create secrets directory
   ansible.builtin.file:
     path: "{{ matrix_root_dir }}/.secrets"
     state: directory

@@ -94,15 +94,15 @@ is_local_ipv4() {
 }
 
 if [[ ${EUID} -ne 0 ]]; then
-  fatal "deploy.sh должен выполняться от root"
+  fatal "deploy.sh must be run as root"
 fi
 
 if [[ ! -x "$ANSIBLE_PLAYBOOK" ]]; then
-  fatal "Ansible venv отсутствует; сначала запустите ./bootstrap.sh"
+  fatal "Ansible venv is missing; run ./bootstrap.sh first"
 fi
 
 if [[ -e "$CONFIG_FILE" ]]; then
-  fatal "существующая установка найдена (${CONFIG_FILE}). Повторный deploy перезаписал бы топологию и обновил версии без backup. Используйте converge.sh (или converge.sh --admin-password для незавершённой установки) либо upgrade.sh."
+  fatal "an existing installation was found (${CONFIG_FILE}). Running deploy again would overwrite the topology and upgrade versions without a backup. Use converge.sh (or converge.sh --admin-password for an unfinished installation) or upgrade.sh."
 fi
 
 install -d -m 0700 "$STATE_DIR" "$RUNTIME_DIR"
@@ -114,22 +114,22 @@ trap cleanup EXIT INT TERM
 
 printf '\nMatrix Deploy\n============\n\n'
 
-BASE_DOMAIN="$(prompt_default 'Базовый домен' 'example.com')"
-SYNAPSE_PREFIX="$(prompt_default 'Префикс Matrix homeserver' 'matrix')"
-ELEMENT_PREFIX="$(prompt_default 'Префикс Element Web' 'element')"
-ADMIN_PREFIX="$(prompt_default 'Префикс Ketesa/Synapse Admin' 'synad')"
-CALL_PREFIX="$(prompt_default 'Префикс Element Call' 'call')"
-RTC_PREFIX="$(prompt_default 'Префикс LiveKit/MatrixRTC' 'rtc')"
-TURN_PREFIX="$(prompt_default 'Префикс legacy TURN' 'turn')"
-CERTBOT_EMAIL="$(prompt_default "Email Let's Encrypt" 'admin@example.com')"
+BASE_DOMAIN="$(prompt_default 'Base domain' 'example.com')"
+SYNAPSE_PREFIX="$(prompt_default 'Matrix homeserver prefix' 'matrix')"
+ELEMENT_PREFIX="$(prompt_default 'Element Web prefix' 'element')"
+ADMIN_PREFIX="$(prompt_default 'Ketesa/Synapse Admin prefix' 'synad')"
+CALL_PREFIX="$(prompt_default 'Element Call prefix' 'call')"
+RTC_PREFIX="$(prompt_default 'LiveKit/MatrixRTC prefix' 'rtc')"
+TURN_PREFIX="$(prompt_default 'Legacy TURN prefix' 'turn')"
+CERTBOT_EMAIL="$(prompt_default "Let's Encrypt email" 'admin@example.com')"
 
-is_dns_name "$BASE_DOMAIN" || fatal "некорректный базовый домен: $BASE_DOMAIN"
+is_dns_name "$BASE_DOMAIN" || fatal "invalid base domain: $BASE_DOMAIN"
 for prefix in "$SYNAPSE_PREFIX" "$ELEMENT_PREFIX" "$ADMIN_PREFIX" "$CALL_PREFIX" "$RTC_PREFIX" "$TURN_PREFIX"; do
-  is_dns_label "$prefix" || fatal "некорректный DNS-префикс: $prefix"
+  is_dns_label "$prefix" || fatal "invalid DNS prefix: $prefix"
 done
-[[ "$CERTBOT_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || fatal "некорректный email Let's Encrypt: $CERTBOT_EMAIL"
+[[ "$CERTBOT_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || fatal "invalid Let's Encrypt email: $CERTBOT_EMAIL"
 
-if prompt_yes_no 'Включить федерацию Matrix?' 'y'; then
+if prompt_yes_no 'Enable Matrix federation?' 'y'; then
   FEDERATION=true
 else
   FEDERATION=false
@@ -137,38 +137,38 @@ fi
 
 DETECTED_IP="$(detect_external_ipv4)"
 if [[ -z "$DETECTED_IP" ]]; then
-  MATRIX_EXTERNAL_IP="$(prompt_default 'Не удалось определить public IPv4. Введите его' '')"
+  MATRIX_EXTERNAL_IP="$(prompt_default 'Could not detect the public IPv4. Enter it' '')"
 else
-  printf 'Определён внешний IPv4: %s\n' "$DETECTED_IP"
-  if prompt_yes_no 'Использовать этот IPv4?' 'y'; then
+  printf 'Detected external IPv4: %s\n' "$DETECTED_IP"
+  if prompt_yes_no 'Use this IPv4?' 'y'; then
     MATRIX_EXTERNAL_IP="$DETECTED_IP"
   else
     MATRIX_EXTERNAL_IP="$(prompt_default 'Public IPv4' "$DETECTED_IP")"
   fi
 fi
 
-is_ipv4 "$MATRIX_EXTERNAL_IP" || fatal "некорректный IPv4: $MATRIX_EXTERNAL_IP"
+is_ipv4 "$MATRIX_EXTERNAL_IP" || fatal "invalid IPv4: $MATRIX_EXTERNAL_IP"
 
 SSH_PORT="$(detect_ssh_port)"
-[[ "$SSH_PORT" =~ ^[0-9]+$ ]] && (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || fatal "некорректный SSH port: $SSH_PORT"
+[[ "$SSH_PORT" =~ ^[0-9]+$ ]] && (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || fatal "invalid SSH port: $SSH_PORT"
 printf 'SSH port: %s\n' "$SSH_PORT"
 
 if is_local_ipv4 "$MATRIX_EXTERNAL_IP"; then
   COTURN_NETWORK_MODE='direct_public'
   COTURN_RELAY_IP="$MATRIX_EXTERNAL_IP"
-  printf 'Сетевой режим TURN: direct_public\n'
+  printf 'TURN network mode: direct_public\n'
 else
   COTURN_NETWORK_MODE='nat'
   DEFAULT_RELAY_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") print $(i+1)}')"
-  COTURN_RELAY_IP="$(prompt_default 'Public IPv4 не назначен хосту. Локальный relay IP для Coturn' "$DEFAULT_RELAY_IP")"
-  is_ipv4 "$COTURN_RELAY_IP" || fatal "некорректный локальный relay IPv4: $COTURN_RELAY_IP"
-  printf 'Сетевой режим TURN: NAT (%s -> %s)\n' "$COTURN_RELAY_IP" "$MATRIX_EXTERNAL_IP"
-  printf 'Внешний NAT должен пробрасывать TURN/RTC порты на этот сервер.\n'
+  COTURN_RELAY_IP="$(prompt_default 'The public IPv4 is not assigned to this host. Local relay IP for Coturn' "$DEFAULT_RELAY_IP")"
+  is_ipv4 "$COTURN_RELAY_IP" || fatal "invalid local relay IPv4: $COTURN_RELAY_IP"
+  printf 'TURN network mode: NAT (%s -> %s)\n' "$COTURN_RELAY_IP" "$MATRIX_EXTERNAL_IP"
+  printf 'The external NAT must forward the TURN/RTC ports to this server.\n'
 fi
 
-read -r -s -p 'Пароль Matrix admin: ' MATRIX_ADMIN_PASSWORD
+read -r -s -p 'Matrix admin password: ' MATRIX_ADMIN_PASSWORD
 printf '\n'
-[[ -n "$MATRIX_ADMIN_PASSWORD" ]] || fatal 'пароль Matrix admin не может быть пустым'
+[[ -n "$MATRIX_ADMIN_PASSWORD" ]] || fatal 'Matrix admin password must not be empty'
 
 cat > "$CONFIG_FILE" <<EOF_CONFIG
 ---
@@ -197,7 +197,7 @@ EOF_SECRET
 chmod 0600 "$SECRET_FILE"
 unset MATRIX_ADMIN_PASSWORD
 
-printf '\nПлан деплоя\n-----------\n'
+printf '\nDeployment plan\n---------------\n'
 printf 'Matrix:       %s.%s\n' "$SYNAPSE_PREFIX" "$BASE_DOMAIN"
 printf 'Element:      %s.%s\n' "$ELEMENT_PREFIX" "$BASE_DOMAIN"
 printf 'Admin:        %s.%s\n' "$ADMIN_PREFIX" "$BASE_DOMAIN"
@@ -208,7 +208,7 @@ printf 'Public IPv4: %s\n' "$MATRIX_EXTERNAL_IP"
 printf 'Federation:  %s\n' "$FEDERATION"
 printf 'Runtime config: %s\n\n' "$CONFIG_FILE"
 
-log 'запускаю Ansible preflight и определяю актуальные stable-версии upstream'
+log 'running Ansible preflight and resolving the latest stable upstream versions'
 (
   cd "$ANSIBLE_DIR"
   "$ANSIBLE_PLAYBOOK" playbooks/preflight.yml \
@@ -217,16 +217,16 @@ log 'запускаю Ansible preflight и определяю актуальны
     --extra-vars 'matrix_refresh_versions=true'
 )
 
-[[ -r "$VERSION_LOCK_FILE" ]] || fatal "preflight не создал lock версий: $VERSION_LOCK_FILE"
+[[ -r "$VERSION_LOCK_FILE" ]] || fatal "preflight did not create the version lock: $VERSION_LOCK_FILE"
 
-if ! prompt_yes_no 'Preflight успешен. Запустить деплой?' 'n'; then
-  printf 'Деплой отменён. Конфигурация сохранена: %s\n' "$CONFIG_FILE"
-  printf 'Выбранные версии сохранены: %s\n' "$VERSION_LOCK_FILE"
-  printf 'Продолжить позже: ./converge.sh --admin-password\n'
+if ! prompt_yes_no 'Preflight succeeded. Start the deployment?' 'n'; then
+  printf 'Deployment cancelled. Configuration saved: %s\n' "$CONFIG_FILE"
+  printf 'Selected versions saved: %s\n' "$VERSION_LOCK_FILE"
+  printf 'To continue later: ./converge.sh --admin-password\n'
   exit 0
 fi
 
-log 'запускаю основной playbook с версиями из preflight lock'
+log 'running the main playbook with versions from the preflight lock'
 (
   cd "$ANSIBLE_DIR"
   "$ANSIBLE_PLAYBOOK" playbooks/site.yml \

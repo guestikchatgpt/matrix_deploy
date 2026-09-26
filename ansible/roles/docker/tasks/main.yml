@@ -1,18 +1,18 @@
 ---
-- name: Проверить поддержку репозитория Docker для текущего дистрибутива
+- name: Check Docker repository support for the current distribution
   ansible.builtin.assert:
     that:
       - ansible_facts['distribution'] == "Ubuntu"
       - ansible_facts['distribution_release'] == "noble"
-    fail_msg: "Matrix Deploy поддерживает Docker deployment только на Ubuntu 24.04 LTS (noble)."
+    fail_msg: "Matrix Deploy supports Docker deployment only on Ubuntu 24.04 LTS (noble)."
 
-- name: Создать директорию для ключей apt
+- name: Create apt keyrings directory
   ansible.builtin.file:
     path: /etc/apt/keyrings
     state: directory
     mode: "0755"
 
-- name: Добавить GPG ключ Docker
+- name: Add Docker GPG key
   ansible.builtin.get_url:
     url: https://download.docker.com/linux/ubuntu/gpg
     dest: /etc/apt/keyrings/docker.asc
@@ -23,7 +23,7 @@
     path: /etc/apt/sources.list.d/docker.list
     state: absent
 
-- name: Добавить репозиторий Docker
+- name: Add Docker repository
   ansible.builtin.deb822_repository:
     name: docker
     types:
@@ -39,7 +39,7 @@
     signed_by: /etc/apt/keyrings/docker.asc
     state: present
 
-- name: Установить Docker Engine
+- name: Install Docker Engine
   ansible.builtin.apt:
     name:
       - docker-ce
@@ -50,7 +50,7 @@
     state: present
     update_cache: true
 
-- name: Включить и запустить Docker
+- name: Enable and start Docker
   ansible.builtin.service:
     name: docker
     state: started
@@ -142,7 +142,7 @@
     groups: ''
     append: false
 
-- name: Создать docker сеть
+- name: Create Docker network
   community.docker.docker_network:
     name: "{{ docker_network_name }}"
     state: present

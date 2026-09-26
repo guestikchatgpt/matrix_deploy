@@ -1,5 +1,5 @@
 ---
-- name: Создать директорию Element Web
+- name: Create Element Web directory
   ansible.builtin.file:
     path: "{{ element_web_root }}"
     state: directory
@@ -7,7 +7,7 @@
     group: "{{ matrix_system_group }}"
     mode: "0750"
 
-- name: Создать конфигурацию Element Web
+- name: Create Element Web configuration
   ansible.builtin.template:
     src: config.json.j2
     dest: "{{ element_web_root }}/config.json"
@@ -16,7 +16,7 @@
     mode: "0644"
   notify: Restart Element Web
 
-- name: Развернуть контейнер Element Web
+- name: Deploy Element Web container
   community.docker.docker_container:
     name: element-web
     image: "{{ element_web_image }}"
