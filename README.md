@@ -5,7 +5,7 @@
 [![Release](https://img.shields.io/github/v/release/guestikchatgpt/matrix_deploy)](https://github.com/guestikchatgpt/matrix_deploy/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Current release: [v1.0.0](https://github.com/guestikchatgpt/matrix_deploy/releases/tag/v1.0.0).**
+**Current release: [v1.0.1](https://github.com/guestikchatgpt/matrix_deploy/releases/tag/v1.0.1).**
 
 Deploys your own [Matrix](https://matrix.org) messenger — with a web client,
 an admin panel, and audio and video calls — on a single clean **Ubuntu 24.04
@@ -119,7 +119,7 @@ Or clone a specific release tag (also as `root`):
 ```bash
 apt-get update && apt-get install -y git
 mkdir -p /opt/matrix-deploy
-git clone --branch v1.0.0 https://github.com/guestikchatgpt/matrix_deploy.git /opt/matrix-deploy/source
+git clone --branch v1.0.1 https://github.com/guestikchatgpt/matrix_deploy.git /opt/matrix-deploy/source
 cd /opt/matrix-deploy/source
 ./bootstrap.sh --install
 ```
@@ -148,7 +148,7 @@ After installation, everything is managed with the `matrix-deploy` command
 The same operations are available as scripts in the repository root:
 `converge.sh`, `upgrade.sh`, `verify.sh`, `backup.sh`, `check.sh`, `destroy.sh`.
 
-If you installed from a git clone of the `v1.0.0` tag, update it by checking
+If you installed from a git clone of a release tag (e.g. `v1.0.1`), update it by checking
 out the next tag you want. Such a clone is in detached HEAD, so a plain
 `git pull` will not work:
 
@@ -199,7 +199,11 @@ Russian documentation lives in [`docs/ru/`](docs/ru/) and [`README.ru.md`](READM
 
 ## Status
 
-**v1.0.0** is the first stable release. Tested on a real Ubuntu 24.04 server:
+**v1.0.1**: the project is now bilingual. The installer, playbook and verifier
+speak English, and the documentation is in English by default with a Russian
+version in [`docs/ru/`](docs/ru/). No changes to deployment logic.
+
+**v1.0.0** was the first stable release. Tested on a real Ubuntu 24.04 server:
 a clean install with real DNS and Let's Encrypt certificates, federation with
 another Matrix server, and audio and video calls between clients on different
 networks. What is not yet tested and what is planned is in

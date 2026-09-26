@@ -109,7 +109,7 @@ git log --oneline -1   # make sure this is main and the expected commit
 ```
 
 To install a specific release instead of the current `main`, run
-`git -C /opt/matrix-deploy/source checkout v1.0.0` after cloning. Instead of
+`git -C /opt/matrix-deploy/source checkout v1.0.1` after cloning. Instead of
 steps 3–4 and 6 you can install a release with a single command — see
 [`INSTALLER.md`](INSTALLER.md).
 

@@ -5,7 +5,7 @@
 [![Release](https://img.shields.io/github/v/release/guestikchatgpt/matrix_deploy)](https://github.com/guestikchatgpt/matrix_deploy/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Текущий релиз: [v1.0.0](https://github.com/guestikchatgpt/matrix_deploy/releases/tag/v1.0.0).**
+**Текущий релиз: [v1.0.1](https://github.com/guestikchatgpt/matrix_deploy/releases/tag/v1.0.1).**
 
 Разворачивает собственный мессенджер на [Matrix](https://matrix.org) — с
 веб-клиентом, админкой, аудио- и видеозвонками — на одном чистом сервере
@@ -114,14 +114,14 @@ curl -fsSL https://raw.githubusercontent.com/guestikchatgpt/matrix_deploy/main/i
 ```bash
 apt-get update && apt-get install -y git
 mkdir -p /opt/matrix-deploy
-git clone --branch v1.0.0 https://github.com/guestikchatgpt/matrix_deploy.git /opt/matrix-deploy/source
+git clone --branch v1.0.1 https://github.com/guestikchatgpt/matrix_deploy.git /opt/matrix-deploy/source
 cd /opt/matrix-deploy/source
 ./bootstrap.sh --install
 ```
 
 Установщик задаст вопросы, проверит сервер и DNS, покажет план и после
 подтверждения всё развернёт. **Пошагово, с подготовкой DNS и портов и
-разбором ошибок — [`docs/INSTALL.md`](docs/ru/INSTALL.md).**
+разбором ошибок — [`docs/ru/INSTALL.md`](docs/ru/INSTALL.md).**
 
 ## Команды
 
@@ -142,7 +142,7 @@ cd /opt/matrix-deploy/source
 Те же операции доступны скриптами в корне репозитория: `converge.sh`,
 `upgrade.sh`, `verify.sh`, `backup.sh`, `check.sh`, `destroy.sh`.
 
-Если установка сделана из git-клона с тегом `v1.0.0`, обновляйте его переходом
+Если установка сделана из git-клона с тегом релиза (например, `v1.0.1`), обновляйте его переходом
 на нужный следующий тег. Такой клон находится в detached HEAD, поэтому обычный
 `git pull` в нём не сработает:
 
@@ -183,19 +183,23 @@ matrix-deploy converge
 
 ## Документация
 
-- [`docs/INSTALL.md`](docs/ru/INSTALL.md) — пошаговая установка на сервер;
-- [`docs/TECHNICAL.md`](docs/ru/TECHNICAL.md) — как всё устроено внутри;
-- [`docs/INSTALLER.md`](docs/ru/INSTALLER.md) — установщик из релизов и выпуск релизов;
-- [`docs/RESTORE.md`](docs/ru/RESTORE.md) — формат резервных копий и восстановление;
-- [`docs/ROADMAP.md`](docs/ru/ROADMAP.md) — планы и статус разработки.
+- [`docs/ru/INSTALL.md`](docs/ru/INSTALL.md) — пошаговая установка на сервер;
+- [`docs/ru/TECHNICAL.md`](docs/ru/TECHNICAL.md) — как всё устроено внутри;
+- [`docs/ru/INSTALLER.md`](docs/ru/INSTALLER.md) — установщик из релизов и выпуск релизов;
+- [`docs/ru/RESTORE.md`](docs/ru/RESTORE.md) — формат резервных копий и восстановление;
+- [`docs/ru/ROADMAP.md`](docs/ru/ROADMAP.md) — планы и статус разработки.
 
 ## Статус
+
+**v1.0.1** — проект стал двуязычным. Установщик, playbook и verifier
+выводят сообщения на английском, документация по умолчанию на английском,
+русская версия — в [`docs/ru/`](docs/ru/). Логика развёртывания не менялась.
 
 **v1.0.0** — первый стабильный релиз. Проверено на реальном сервере Ubuntu
 24.04: чистая установка с настоящими DNS и сертификатами Let's Encrypt,
 федерация с другим Matrix-сервером, аудио- и видеозвонки между клиентами из
 разных сетей. Что ещё не проверено и что в планах — в
-[`docs/ROADMAP.md`](docs/ru/ROADMAP.md). Список изменений — на странице
+[`docs/ru/ROADMAP.md`](docs/ru/ROADMAP.md). Список изменений — на странице
 [Releases](https://github.com/guestikchatgpt/matrix_deploy/releases).
 
 ## Лицензия

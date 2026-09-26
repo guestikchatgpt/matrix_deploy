@@ -105,7 +105,7 @@ git log --oneline -1   # убедиться, что это main и нужный 
 ```
 
 Чтобы поставить конкретный релиз, а не текущий `main`, после клона выполните
-`git -C /opt/matrix-deploy/source checkout v1.0.0`. Вместо шагов 3–4 и 6 можно
+`git -C /opt/matrix-deploy/source checkout v1.0.1`. Вместо шагов 3–4 и 6 можно
 поставить релиз одной командой — см. [`INSTALLER.md`](INSTALLER.md).
 
 ## 5. Проверить DNS до запуска
